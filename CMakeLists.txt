@@ -3578,6 +3578,9 @@ set(CPACK_FILES
   steam_appid.txt
   ${COPY_FILES}
 )
+if(EXTRA_PACKAGE_FILES)
+  list(APPEND CPACK_FILES ${EXTRA_PACKAGE_FILES})
+endif()
 if(NOT TARGET_OS STREQUAL "emscripten")
   list(APPEND CPACK_FILES storage.cfg)
 endif()
