@@ -61,6 +61,7 @@ void CAIBot::OnReset()
 	m_RouteUsesFreeze = false;
 	m_FailureCost.clear();
 	m_SuccessCount.clear();
+	m_InputVariants.clear();
 	m_vRecentCells.clear();
 	m_MapWidth = 0;
 	m_MapHeight = 0;
@@ -81,6 +82,8 @@ void CAIBot::OnReset()
 	m_RewardNetUpdates = 0;
 	m_LastFailureTrail = 0;
 	m_RouteRiskTiles = 0;
+	m_InputTrials = 0;
+	m_InputExplorations = 0;
 	m_TotalTrainingReward = 0.0f;
 	m_RewardNetEstimate = 0.0f;
 	m_BestRaceProgress = 0.0f;
@@ -125,6 +128,7 @@ bool CAIBot::EnsureMap()
 	m_RouteUsesFreeze = false;
 	m_FailureCost.clear();
 	m_SuccessCount.clear();
+	m_InputVariants.clear();
 	m_vRecentCells.clear();
 	m_GoalCell = -1;
 	m_RouteIndex = 0;
@@ -141,6 +145,8 @@ bool CAIBot::EnsureMap()
 	m_RewardNetUpdates = 0;
 	m_LastFailureTrail = 0;
 	m_RouteRiskTiles = 0;
+	m_InputTrials = 0;
+	m_InputExplorations = 0;
 	m_TotalTrainingReward = 0.0f;
 	m_RewardNetEstimate = 0.0f;
 	m_BestRaceProgress = 0.0f;
@@ -351,6 +357,126 @@ int CAIBot::LearnedSuccessBonus(int Cell) const
 	return 0;
 }
 
+const char *CAIBot::ActiveInputVariantName() const
+{
+	switch(m_ActiveInputVariant)
+	{
+	case 0: return "balanced";
+	case 1: return "quick tap";
+	case 2: return "long jump";
+	case 3: return "cautious";
+	case 4: return "hook rhythm";
+	default: return "waiting";
+	}
+}
+
+unsigned long long CAIBot::InputStateKey(int TargetCell, bool NeedJump, bool NeedHook) const
+{
+	// A target platform plus the type of required movement is stable across
+	// respawns. Keeping it map-local (the whole file is per map) lets a later
+	// attempt reuse the best input rhythm for the same jump or hook.
+	const unsigned long long Cell = (unsigned long long)(unsigned int)std::max(0, TargetCell);
+	const unsigned long long Flags = (NeedJump ? 1ULL : 0ULL) | (NeedHook ? 2ULL : 0ULL);
+	return Cell | (Flags << 32);
+}
+
+int CAIBot::ChooseInputVariant(unsigned long long StateKey, bool &Exploring) const
+{
+	Exploring = false;
+	const std::array<SInputVariantStats, INPUT_VARIANTS> Empty = {};
+	const auto It = m_InputVariants.find(StateKey);
+	const std::array<SInputVariantStats, INPUT_VARIANTS> &aStats = It != m_InputVariants.end() ? It->second : Empty;
+	const int Start = (int)((StateKey + (unsigned long long)m_Episodes) % INPUT_VARIANTS);
+
+	// Every profile is tried once before the learned score is trusted. This is
+	// deliberate exploration, not random button mashing.
+	for(int Offset = 0; Offset < INPUT_VARIANTS; ++Offset)
+	{
+		const int Variant = (Start + Offset) % INPUT_VARIANTS;
+		if(aStats[Variant].m_Attempts == 0)
+		{
+			Exploring = true;
+			return Variant;
+		}
+	}
+
+	int LeastTried = 0;
+	for(int Variant = 1; Variant < INPUT_VARIANTS; ++Variant)
+	{
+		if(aStats[Variant].m_Attempts < aStats[LeastTried].m_Attempts)
+			LeastTried = Variant;
+	}
+
+	const unsigned long long Roll = StateKey * 1103515245ULL + (unsigned long long)m_Episodes * 12345ULL + (unsigned long long)m_DeathCount;
+	if((int)(Roll % 100ULL) < g_Config.m_TcAiBotInputExplorePercent)
+	{
+		Exploring = true;
+		return LeastTried;
+	}
+
+	int Best = 0;
+	float BestScore = -std::numeric_limits<float>::infinity();
+	for(int Variant = 0; Variant < INPUT_VARIANTS; ++Variant)
+	{
+		const SInputVariantStats &Stats = aStats[Variant];
+		// Failure is intentionally more expensive than success is valuable: the
+		// bot should prefer a slightly slower but repeatable input rhythm.
+		const float Score = (4.0f * (float)Stats.m_Successes - 6.0f * (float)Stats.m_Failures) / (float)std::max(1, Stats.m_Attempts);
+		if(Score > BestScore || (Score == BestScore && Stats.m_Attempts < aStats[Best].m_Attempts))
+		{
+			BestScore = Score;
+			Best = Variant;
+		}
+	}
+	return Best;
+}
+
+int CAIBot::BeginInputTrial(unsigned long long StateKey, int Tick)
+{
+	if(m_HasActiveInput && m_ActiveInputState == StateKey)
+	{
+		if(m_ActiveInputResolved)
+			return m_ActiveInputVariant;
+		if(Tick - m_ActiveInputStartTick < g_Config.m_TcAiBotInputTrialTicks)
+			return m_ActiveInputVariant;
+		// The tee did not make progress for an entire trial window. Treat that
+		// as an input failure now, rather than waiting forever for a death.
+		RecordInputFailure();
+	}
+
+	bool Exploring = false;
+	const int Variant = ChooseInputVariant(StateKey, Exploring);
+	SInputVariantStats &Stats = m_InputVariants[StateKey][Variant];
+	++Stats.m_Attempts;
+	++m_InputTrials;
+	if(Exploring)
+		++m_InputExplorations;
+
+	m_HasActiveInput = true;
+	m_ActiveInputState = StateKey;
+	m_ActiveInputVariant = Variant;
+	m_ActiveInputStartTick = Tick;
+	m_ActiveInputResolved = false;
+	m_ActiveInputExploring = Exploring;
+	return Variant;
+}
+
+void CAIBot::RecordInputSuccess()
+{
+	if(!m_HasActiveInput || m_ActiveInputResolved)
+		return;
+	++m_InputVariants[m_ActiveInputState][m_ActiveInputVariant].m_Successes;
+	m_ActiveInputResolved = true;
+}
+
+void CAIBot::RecordInputFailure()
+{
+	if(!m_HasActiveInput || m_ActiveInputResolved)
+		return;
+	++m_InputVariants[m_ActiveInputState][m_ActiveInputVariant].m_Failures;
+	m_ActiveInputResolved = true;
+}
+
 void CAIBot::RememberVisitedCell(int Cell)
 {
 	if(Cell < 0)
@@ -499,6 +625,12 @@ void CAIBot::ResetEpisode()
 {
 	m_vRewardRoute.clear();
 	m_vRecentCells.clear();
+	m_HasActiveInput = false;
+	m_ActiveInputResolved = false;
+	m_ActiveInputExploring = false;
+	m_ActiveInputState = 0;
+	m_ActiveInputVariant = -1;
+	m_ActiveInputStartTick = -1000000;
 	m_RouteUsesFreeze = false;
 	m_LastRewardCell = -1;
 	m_LastRewardRouteIndex = -1;
@@ -663,7 +795,10 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 			m_CurrentReward = NewReward;
 			m_LastTrainingReward = Delta > 0.0f ? Delta : Delta < 0.0f ? -1.0f : 0.0f;
 			if(Delta > 0.0f)
+			{
 				ReinforceSuccess(CurrentCell);
+				RecordInputSuccess();
+			}
 			m_LastRewardRouteIndex = RouteIndex;
 			m_RouteIndex = std::max(m_RouteIndex, RouteIndex);
 		}
@@ -710,6 +845,7 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 		{
 			++m_RewardedPathSteps;
 			ReinforceSuccess(CurrentCell);
+			RecordInputSuccess();
 			if(IsFreeze(CurrentCell))
 				++m_SafeFreezeSteps;
 		}
@@ -745,6 +881,7 @@ void CAIBot::RegisterFailure()
 	m_TotalTrainingReward += m_LastTrainingReward;
 	if(m_LastProgressCell >= 0)
 	{
+		RecordInputFailure();
 		PenalizeRecentTrajectory();
 		const int RouteIndex = m_RaceStarted ? RewardRouteIndexForCell(m_LastProgressCell) : RouteIndexForCell(m_LastProgressCell);
 		TrainRewardNet(m_LastTrainingReward, RewardFeatures(m_LastProgressCell, RouteIndex, false, false, false));
@@ -770,6 +907,11 @@ void CAIBot::LoadLearning()
 	{
 		int Cell = -1;
 		int Cost = 0;
+		unsigned long long StateKey = 0;
+		int Variant = -1;
+		int Attempts = 0;
+		int Successes = 0;
+		int Failures = 0;
 		// v2 files distinguish danger memory from confirmed successful cells.
 		// The old two-number format remains valid and is interpreted as danger
 		// memory so existing users do not lose what the bot already learned.
@@ -781,6 +923,15 @@ void CAIBot::LoadLearning()
 		if(std::sscanf(pLine, "S %d %d", &Cell, &Cost) == 2 && Cell >= 0 && Cell < m_MapWidth * m_MapHeight && Cost > 0)
 		{
 			m_SuccessCount[Cell] = std::min(Cost, 12);
+			continue;
+		}
+		if(std::sscanf(pLine, "A %llu %d %d %d %d", &StateKey, &Variant, &Attempts, &Successes, &Failures) == 5 && Variant >= 0 && Variant < INPUT_VARIANTS && Attempts > 0)
+		{
+			SInputVariantStats &Stats = m_InputVariants[StateKey][Variant];
+			Stats.m_Attempts = std::min(Attempts, 10000);
+			Stats.m_Successes = std::clamp(Successes, 0, Stats.m_Attempts);
+			Stats.m_Failures = std::clamp(Failures, 0, Stats.m_Attempts);
+			m_InputTrials += Stats.m_Attempts;
 			continue;
 		}
 		if(std::sscanf(pLine, "%d %d", &Cell, &Cost) == 2 && Cell >= 0 && Cell < m_MapWidth * m_MapHeight && Cost > 0)
@@ -816,6 +967,17 @@ void CAIBot::SaveLearning() const
 		str_format(aLine, sizeof(aLine), "S %d %d\n", Cell, Count);
 		io_write(File, aLine, str_length(aLine));
 	}
+	for(const auto &[StateKey, aStats] : m_InputVariants)
+	{
+		for(int Variant = 0; Variant < INPUT_VARIANTS; ++Variant)
+		{
+			const SInputVariantStats &Stats = aStats[Variant];
+			if(Stats.m_Attempts <= 0)
+				continue;
+			str_format(aLine, sizeof(aLine), "A %llu %d %d %d %d\n", StateKey, Variant, Stats.m_Attempts, Stats.m_Successes, Stats.m_Failures);
+			io_write(File, aLine, str_length(aLine));
+		}
+	}
 	io_close(File);
 }
 
@@ -833,6 +995,8 @@ void CAIBot::LoadStats()
 	while(const char *pLine = Reader.Get())
 	{
 		int Version = 0;
+		if(std::sscanf(pLine, "v%d %d %d %d %d %d %d %d %d %d %f %f", &Version, &m_Episodes, &m_StartCount, &m_FinishCount, &m_DeathCount, &m_RewardedPathSteps, &m_OffRouteSteps, &m_SafeFreezeSteps, &m_RewardNetUpdates, &m_InputExplorations, &m_BestRaceProgress, &m_BestRaceReward) == 12 && Version == 4)
+			continue;
 		if(std::sscanf(pLine, "v%d %d %d %d %d %d %d %d %d %f %f", &Version, &m_Episodes, &m_StartCount, &m_FinishCount, &m_DeathCount, &m_RewardedPathSteps, &m_OffRouteSteps, &m_SafeFreezeSteps, &m_RewardNetUpdates, &m_BestRaceProgress, &m_BestRaceReward) == 11 && Version == 3)
 			continue;
 		if(std::sscanf(pLine, "v%d %d %d %d %d %d %d %d %d", &Version, &m_Episodes, &m_StartCount, &m_FinishCount, &m_DeathCount, &m_RewardedPathSteps, &m_OffRouteSteps, &m_SafeFreezeSteps, &m_RewardNetUpdates) == 9 && Version == 2)
@@ -865,7 +1029,7 @@ void CAIBot::SaveStats() const
 	}
 
 	char aLine[256];
-	str_format(aLine, sizeof(aLine), "v3 %d %d %d %d %d %d %d %d %.6f %.6f\n", m_Episodes, m_StartCount, m_FinishCount, m_DeathCount, m_RewardedPathSteps, m_OffRouteSteps, m_SafeFreezeSteps, m_RewardNetUpdates, m_BestRaceProgress, m_BestRaceReward);
+	str_format(aLine, sizeof(aLine), "v4 %d %d %d %d %d %d %d %d %d %.6f %.6f\n", m_Episodes, m_StartCount, m_FinishCount, m_DeathCount, m_RewardedPathSteps, m_OffRouteSteps, m_SafeFreezeSteps, m_RewardNetUpdates, m_InputExplorations, m_BestRaceProgress, m_BestRaceReward);
 	io_write(File, aLine, str_length(aLine));
 	str_format(aLine, sizeof(aLine), "reward %.6f\n", m_TotalTrainingReward);
 	io_write(File, aLine, str_length(aLine));
@@ -900,7 +1064,7 @@ void CAIBot::RenderHud() const
 	const float X = 5.0f;
 	const float Y = 54.0f;
 	const float BoxWidth = 112.0f;
-	const float BoxHeight = 54.0f;
+	const float BoxHeight = 61.0f;
 	const float FontSize = 5.0f;
 	const float LineHeight = 7.0f;
 	Graphics()->DrawRect(X, Y, BoxWidth, BoxHeight, ColorRGBA(0.0f, 0.0f, 0.0f, 0.58f), IGraphics::CORNER_ALL, 4.0f);
@@ -924,6 +1088,8 @@ void CAIBot::RenderHud() const
 	str_format(aLine, sizeof(aLine), "Attempts: %d  deaths: %d", Episodes(), DeathCount());
 	RenderLine(aLine);
 	str_format(aLine, sizeof(aLine), "Memory: danger %d  safe %d  risk %d", LearnedFailures(), LearnedSuccesses(), RouteRiskTiles());
+	RenderLine(aLine);
+	str_format(aLine, sizeof(aLine), "Input: %s%s  trials %d", ActiveInputVariantName(), ActiveInputIsExploring() ? "*" : "", InputTrials());
 	RenderLine(aLine);
 	if(m_ResetRequested)
 		str_format(aLine, sizeof(aLine), "Reset pending: retry %d", m_ResetRetries);
@@ -1073,10 +1239,7 @@ bool CAIBot::ApplyInput(CNetObj_PlayerInput &Input)
 	if(Input.m_Direction != 0 && IsSolid(DirectionCell))
 		NeedJump = true;
 
-	// A held jump fires only once. Alternating short press/release windows lets
-	// the tee jump again after landing and makes wall-jumps possible.
 	const int Tick = Client()->GameTick(g_Config.m_ClDummy);
-	Input.m_Jump = NeedJump && ((Tick / 3) % 2 == 0) ? 1 : 0;
 	Input.m_TargetX = (int)Delta.x;
 	Input.m_TargetY = (int)Delta.y;
 	if(!Input.m_TargetX && !Input.m_TargetY)
@@ -1112,7 +1275,45 @@ bool CAIBot::ApplyInput(CNetObj_PlayerInput &Input)
 	}
 
 	const bool NeedHook = HookAim.x != 0.0f || HookAim.y != 0.0f;
-	Input.m_Hook = NeedHook && Tick % 12 < 10 ? 1 : 0;
+	const int InputVariant = (NeedJump || NeedHook) ? BeginInputTrial(InputStateKey(m_vRoute[AimIndex], NeedJump, NeedHook), Tick) : -1;
+
+	// Each learned profile is a plausible input rhythm. They differ in jump
+	// press/release timing, hook rhythm and, for the cautious profile, braking
+	// close to a target platform. The policy chooses among them from recorded
+	// successes and failures for this exact map segment.
+	bool JumpPressed = false;
+	int HookPeriod = 12;
+	int HookHeldTicks = 10;
+	switch(InputVariant)
+	{
+	case 1: // quick tap
+		JumpPressed = Tick % 4 < 2;
+		HookPeriod = 8;
+		HookHeldTicks = 6;
+		break;
+	case 2: // long jump
+		JumpPressed = Tick % 8 < 6;
+		HookPeriod = 16;
+		HookHeldTicks = 14;
+		break;
+	case 3: // cautious: distinct press edge and a small braking window
+		JumpPressed = Tick % 6 == 0;
+		HookPeriod = 10;
+		HookHeldTicks = 4;
+		if(Input.m_Direction != 0 && std::abs(Delta.x) < 64.0f && Tick % 8 >= 5)
+			Input.m_Direction = 0;
+		break;
+	case 4: // hook rhythm
+		JumpPressed = Tick % 5 < 2;
+		HookPeriod = 6;
+		HookHeldTicks = 5;
+		break;
+	default: // balanced
+		JumpPressed = (Tick / 3) % 2 == 0;
+		break;
+	}
+	Input.m_Jump = NeedJump && JumpPressed ? 1 : 0;
+	Input.m_Hook = NeedHook && Tick % HookPeriod < HookHeldTicks ? 1 : 0;
 	if(NeedHook)
 	{
 		// Moving toward the wall while hooking prevents a vertical climb from
@@ -1134,9 +1335,12 @@ void CAIBot::ClearLearning()
 {
 	m_FailureCost.clear();
 	m_SuccessCount.clear();
+	m_InputVariants.clear();
 	m_vRecentCells.clear();
 	m_LastFailureTrail = 0;
 	m_RouteRiskTiles = 0;
+	m_InputTrials = 0;
+	m_InputExplorations = 0;
 	m_Episodes = 0;
 	m_StartCount = 0;
 	m_FinishCount = 0;
