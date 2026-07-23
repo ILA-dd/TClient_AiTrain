@@ -289,6 +289,7 @@ MACRO_CONFIG_INT(TcAiBotHud, tc_aibot_hud, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAV
 MACRO_CONFIG_INT(TcAiBotAllowFreeze, tc_aibot_allow_freeze, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Allow AIBot routes through freeze when a safe platform is below")
 MACRO_CONFIG_INT(TcAiBotResetUnsafeFreeze, tc_aibot_reset_unsafe_freeze, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Restart AIBot after entering freeze without a safe platform below")
 MACRO_CONFIG_INT(TcAiBotUnsafeFreezeDelay, tc_aibot_unsafe_freeze_delay, 12, 1, 100, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Ticks AIBot waits before restarting from unsafe freeze")
+MACRO_CONFIG_INT(TcAiBotSafeFreezeEscapeDelay, tc_aibot_safe_freeze_escape_delay, 50, 1, 250, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Ticks AIBot gives a freeze drop route to reach its safe platform before restarting")
 MACRO_CONFIG_INT(TcAiBotUseHook, tc_aibot_use_hook, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Let AIBot use the hook for upward route segments")
 MACRO_CONFIG_INT(TcAiBotFreezeDropTiles, tc_aibot_freeze_drop_tiles, 6, 1, 32, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Maximum fall depth that AIBot considers safe after entering freeze")
 MACRO_CONFIG_INT(TcAiBotFreezePenalty, tc_aibot_freeze_penalty, 50, 1, 500, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Extra A* route cost for a safe freeze tile")
