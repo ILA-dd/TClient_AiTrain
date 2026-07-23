@@ -385,7 +385,7 @@ void CMenus::RenderSettingsTClientAIBot(CUIRect MainView)
 
 	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBot, "Enable AIBot", &g_Config.m_TcAiBot, &MainView, LineSize);
 	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBotHud, "Show AIBot statistics in the game HUD", &g_Config.m_TcAiBotHud, &MainView, LineSize);
-	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBotAllowFreeze, "Allow safe routes through freeze", &g_Config.m_TcAiBotAllowFreeze, &MainView, LineSize);
+	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBotAllowFreeze, "Use safe freeze only when no freeze-free route exists", &g_Config.m_TcAiBotAllowFreeze, &MainView, LineSize);
 	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBotResetUnsafeFreeze, "Reset when freeze escape fails", &g_Config.m_TcAiBotResetUnsafeFreeze, &MainView, LineSize);
 	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBotUseHook, "Use hook on upward route segments", &g_Config.m_TcAiBotUseHook, &MainView, LineSize);
 
