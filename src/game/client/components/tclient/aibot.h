@@ -27,6 +27,9 @@ public:
 	const char *Status() const { return m_aStatus; }
 	int PlannedNodes() const { return (int)m_vRoute.size(); }
 	int LearnedFailures() const { return (int)m_FailureCost.size(); }
+	int LearnedSuccesses() const { return (int)m_SuccessCount.size(); }
+	int LastFailureTrail() const { return m_LastFailureTrail; }
+	int RouteRiskTiles() const { return m_RouteRiskTiles; }
 	int RouteProgressNodes() const { return m_LastRewardRouteIndex + 1; }
 	float RouteProgressPercent() const;
 	float CurrentReward() const { return m_CurrentReward; }
@@ -60,12 +63,17 @@ private:
 	int FindFinish() const;
 	int RouteIndexForCell(int Cell) const;
 	int RewardRouteIndexForCell(int Cell) const;
+	int LearnedRisk(int Cell) const;
+	int LearnedSuccessBonus(int Cell) const;
 	int RawTile(int Cell) const;
 	int FrontRawTile(int Cell) const;
 	int CellFromPos(const vec2 &Pos) const;
 	vec2 CellCenter(int Cell) const;
 	void ResetEpisode();
 	void UpdateReward(int CurrentCell, int Tick);
+	void RememberVisitedCell(int Cell);
+	void ReinforceSuccess(int Cell);
+	void PenalizeRecentTrajectory();
 	bool HandleFreeze(int CurrentCell, int Tick);
 	void FinishResetAtSpawn(int Tick);
 	std::array<float, 6> RewardFeatures(int Cell, int RouteIndex, bool OnRoute, bool Safe, bool Finished) const;
@@ -85,6 +93,11 @@ private:
 	// meaning of 0% or 100% progress.
 	std::vector<int> m_vRewardRoute;
 	std::unordered_map<int, int> m_FailureCost;
+	std::unordered_map<int, int> m_SuccessCount;
+	// The last unique cells actually travelled in this episode. A failure is
+	// normally caused by an approach, not one isolated tile, so this trail is
+	// what gets penalized and makes the next A* route meaningfully change.
+	std::vector<int> m_vRecentCells;
 	int m_MapWidth = 0;
 	int m_MapHeight = 0;
 	int m_GoalCell = -1;
@@ -108,6 +121,8 @@ private:
 	int m_OffRouteSteps = 0;
 	int m_SafeFreezeSteps = 0;
 	int m_RewardNetUpdates = 0;
+	int m_LastFailureTrail = 0;
+	int m_RouteRiskTiles = 0;
 	float m_CurrentReward = -1.0f;
 	float m_LastTrainingReward = 0.0f;
 	float m_TotalTrainingReward = 0.0f;
