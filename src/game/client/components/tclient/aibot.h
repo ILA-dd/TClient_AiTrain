@@ -15,7 +15,7 @@ public:
 
 	// Called immediately before the client sends the local player's input.
 	// Returns true only when the bot replaced the movement input.
-	bool ApplyInput(class CNetObj_PlayerInput &Input);
+	bool ApplyInput(struct CNetObj_PlayerInput &Input);
 
 	void ForceReplan();
 	void ClearLearning();
