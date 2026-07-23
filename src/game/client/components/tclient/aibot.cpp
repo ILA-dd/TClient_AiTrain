@@ -4,9 +4,11 @@
 #include <base/system.h>
 
 #include <engine/client.h>
+#include <engine/graphics.h>
 #include <engine/shared/config.h>
 #include <engine/shared/linereader.h>
 #include <engine/storage.h>
+#include <engine/textrender.h>
 
 #include <game/client/components/controls.h>
 #include <game/client/gameclient.h>
@@ -208,15 +210,6 @@ bool CAIBot::IsFinish(int Cell) const
 	return RawTile(Cell) == TILE_FINISH || FrontRawTile(Cell) == TILE_FINISH;
 }
 
-bool CAIBot::IsLocalFrozen(int Tick) const
-{
-	const int LocalId = GameClient()->m_aLocalIds[g_Config.m_ClDummy];
-	if(LocalId < 0 || LocalId >= MAX_CLIENTS)
-		return false;
-	const auto &ClientInfo = GameClient()->m_aClients[LocalId];
-	return ClientInfo.m_DeepFrozen || ClientInfo.m_FreezeEnd == -1 || ClientInfo.m_FreezeEnd > Tick;
-}
-
 bool CAIBot::CanSurviveFreeze(int Cell) const
 {
 	const int X = Cell % m_MapWidth;
@@ -403,7 +396,9 @@ bool CAIBot::HandleFreeze(int CurrentCell, int Tick)
 		}
 	}
 
-	if(m_UnsafeFreezeSinceTick < 0 || !IsLocalFrozen(Tick) || Tick - m_UnsafeFreezeSinceTick < g_Config.m_TcAiBotUnsafeFreezeDelay)
+	// Do not rely on the optional extended freeze snapshot here. Some servers
+	// report it late, while the map tile already proves that this is unsafe.
+	if(m_UnsafeFreezeSinceTick < 0 || Tick - m_UnsafeFreezeSinceTick < g_Config.m_TcAiBotUnsafeFreezeDelay)
 		return false;
 
 	// Record exactly one failure before asking the server for a normal kill.
@@ -708,9 +703,57 @@ void CAIBot::MaybeSaveProgress(int Tick, bool Force)
 	SaveStats();
 }
 
+void CAIBot::RenderHud() const
+{
+	if(!g_Config.m_TcAiBotHud || !m_aMapName[0])
+		return;
+
+	// The regular HUD uses a 300-unit high screen. Rendering in the same space
+	// makes this panel scale with every resolution and avoids covering the DDRace
+	// information on the right side of the screen.
+	const float Height = 300.0f;
+	const float Width = Height * Graphics()->ScreenAspect();
+	Graphics()->MapScreen(0.0f, 0.0f, Width, Height);
+
+	const float X = 5.0f;
+	const float Y = 54.0f;
+	const float BoxWidth = 112.0f;
+	const float BoxHeight = 54.0f;
+	const float FontSize = 5.0f;
+	const float LineHeight = 7.0f;
+	Graphics()->DrawRect(X, Y, BoxWidth, BoxHeight, ColorRGBA(0.0f, 0.0f, 0.0f, 0.58f), IGraphics::CORNER_ALL, 4.0f);
+
+	TextRender()->TextColor(g_Config.m_TcAiBot ? ColorRGBA(0.45f, 1.0f, 0.55f, 1.0f) : ColorRGBA(1.0f, 0.75f, 0.25f, 1.0f));
+	TextRender()->Text(X + 4.0f, Y + 3.0f, FontSize, g_Config.m_TcAiBot ? "AIBot  ON" : "AIBot  OFF", -1.0f);
+	TextRender()->TextColor(TextRender()->DefaultTextColor());
+
+	char aLine[128];
+	float LineY = Y + 11.0f;
+	const auto RenderLine = [&](const char *pText) {
+		TextRender()->Text(X + 4.0f, LineY, FontSize, pText, -1.0f);
+		LineY += LineHeight;
+	};
+	str_format(aLine, sizeof(aLine), "Phase: %s  route: %.1f%%", PhaseName(), RouteProgressPercent());
+	RenderLine(aLine);
+	str_format(aLine, sizeof(aLine), "Reward: %.1f  best: %.1f", CurrentReward(), BestRaceReward());
+	RenderLine(aLine);
+	str_format(aLine, sizeof(aLine), "Best route: %.1f%%", BestRaceProgressPercent());
+	RenderLine(aLine);
+	str_format(aLine, sizeof(aLine), "Attempts: %d  deaths: %d", Episodes(), DeathCount());
+	RenderLine(aLine);
+	str_format(aLine, sizeof(aLine), "Memory: %d tiles  NN: %d", LearnedFailures(), RewardNetUpdates());
+	RenderLine(aLine);
+	str_format(aLine, sizeof(aLine), "A* safe: %d  off: %d", RewardedPathSteps(), OffRouteSteps());
+	RenderLine(aLine);
+
+	TextRender()->TextColor(TextRender()->DefaultTextColor());
+}
+
 void CAIBot::OnRender()
 {
 	if(!EnsureMap())
+		return;
+	if(!g_Config.m_TcAiBot)
 		return;
 
 	const CNetObj_Character *pCharacter = GameClient()->m_Snap.m_pLocalCharacter;
