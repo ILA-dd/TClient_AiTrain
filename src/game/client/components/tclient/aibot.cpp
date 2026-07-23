@@ -62,6 +62,8 @@ void CAIBot::OnReset()
 	m_GoalCell = -1;
 	m_RouteIndex = 0;
 	m_LastPlanTick = -1000000;
+	m_LastPersistenceTick = -1000000;
+	m_UnsafeFreezeSinceTick = -1;
 	m_LastCell = -1;
 	m_LastProgressCell = -1;
 	m_Episodes = 0;
@@ -74,12 +76,23 @@ void CAIBot::OnReset()
 	m_RewardNetUpdates = 0;
 	m_TotalTrainingReward = 0.0f;
 	m_RewardNetEstimate = 0.0f;
+	m_BestRaceProgress = 0.0f;
+	m_BestRaceReward = 0.0f;
 	m_aRewardNetWeights.fill(0.0f);
 	ResetEpisode();
 	m_HadLocalCharacter = false;
+	m_ResetRequested = false;
 	m_ForceReplan = true;
 	m_aMapName[0] = '\0';
 	SetStatus("Waiting for a map");
+}
+
+void CAIBot::OnShutdown()
+{
+	// A normal client close must not discard route penalties or reward-network
+	// updates earned since the last periodic autosave.
+	SaveLearning();
+	SaveStats();
 }
 
 void CAIBot::SetStatus(const char *pStatus)
@@ -96,6 +109,7 @@ bool CAIBot::EnsureMap()
 	if(str_comp(m_aMapName, pMapName) == 0 && m_MapWidth == Collision()->GetWidth() && m_MapHeight == Collision()->GetHeight())
 		return true;
 
+	SaveLearning();
 	SaveStats();
 	str_copy(m_aMapName, pMapName, sizeof(m_aMapName));
 	m_MapWidth = Collision()->GetWidth();
@@ -104,6 +118,7 @@ bool CAIBot::EnsureMap()
 	m_FailureCost.clear();
 	m_GoalCell = -1;
 	m_RouteIndex = 0;
+	m_LastPersistenceTick = -1000000;
 	m_LastCell = -1;
 	m_LastProgressCell = -1;
 	m_Episodes = 0;
@@ -116,6 +131,8 @@ bool CAIBot::EnsureMap()
 	m_RewardNetUpdates = 0;
 	m_TotalTrainingReward = 0.0f;
 	m_RewardNetEstimate = 0.0f;
+	m_BestRaceProgress = 0.0f;
+	m_BestRaceReward = 0.0f;
 	m_aRewardNetWeights.fill(0.0f);
 	ResetEpisode();
 	m_ForceReplan = true;
@@ -189,6 +206,15 @@ bool CAIBot::IsStart(int Cell) const
 bool CAIBot::IsFinish(int Cell) const
 {
 	return RawTile(Cell) == TILE_FINISH || FrontRawTile(Cell) == TILE_FINISH;
+}
+
+bool CAIBot::IsLocalFrozen(int Tick) const
+{
+	const int LocalId = GameClient()->m_aLocalIds[g_Config.m_ClDummy];
+	if(LocalId < 0 || LocalId >= MAX_CLIENTS)
+		return false;
+	const auto &ClientInfo = GameClient()->m_aClients[LocalId];
+	return ClientInfo.m_DeepFrozen || ClientInfo.m_FreezeEnd == -1 || ClientInfo.m_FreezeEnd > Tick;
 }
 
 bool CAIBot::CanSurviveFreeze(int Cell) const
@@ -352,6 +378,41 @@ void CAIBot::ResetEpisode()
 	m_EpisodeActive = false;
 	m_RaceStarted = false;
 	m_FinishCrossed = false;
+	m_UnsafeFreezeSinceTick = -1;
+	m_ResetRequested = false;
+}
+
+bool CAIBot::HandleFreeze(int CurrentCell, int Tick)
+{
+	if(!g_Config.m_TcAiBotResetUnsafeFreeze || m_ResetRequested)
+		return m_ResetRequested;
+
+	// Do not kill a tee that has entered a freeze strip with a reachable solid
+	// platform underneath. It can fall through, land safely and unfreeze there.
+	if(IsFreeze(CurrentCell))
+	{
+		if(CanSurviveFreeze(CurrentCell))
+		{
+			m_UnsafeFreezeSinceTick = -1;
+			return false;
+		}
+		if(m_UnsafeFreezeSinceTick < 0)
+		{
+			m_UnsafeFreezeSinceTick = Tick;
+			SetStatus("Unsafe freeze detected, preparing reset");
+		}
+	}
+
+	if(m_UnsafeFreezeSinceTick < 0 || !IsLocalFrozen(Tick) || Tick - m_UnsafeFreezeSinceTick < g_Config.m_TcAiBotUnsafeFreezeDelay)
+		return false;
+
+	// Record exactly one failure before asking the server for a normal kill.
+	// The no-character handler skips a duplicate penalty while this reset is in flight.
+	RegisterFailure();
+	m_ResetRequested = true;
+	GameClient()->SendKill();
+	SetStatus("Unsafe freeze: reset requested and learned");
+	return true;
 }
 
 const char *CAIBot::PhaseName() const
@@ -462,6 +523,8 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 		m_FinishCrossed = true;
 		m_LastTrainingReward = 20.0f;
 		m_CurrentReward += 100.0f;
+		m_BestRaceProgress = 1.0f;
+		m_BestRaceReward = std::max(m_BestRaceReward, m_CurrentReward);
 		m_TotalTrainingReward += m_LastTrainingReward;
 		++m_FinishCount;
 		TrainRewardNet(m_LastTrainingReward, RewardFeatures(CurrentCell, RouteIndex, OnRoute, Safe, true));
@@ -504,6 +567,9 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 
 		m_LastRewardRouteIndex = RouteIndex;
 		m_RouteIndex = std::max(m_RouteIndex, RouteIndex);
+		if(m_vRoute.size() > 1)
+			m_BestRaceProgress = std::max(m_BestRaceProgress, (float)RouteIndex / (float)(m_vRoute.size() - 1));
+		m_BestRaceReward = std::max(m_BestRaceReward, m_CurrentReward);
 	}
 	else
 	{
@@ -594,6 +660,8 @@ void CAIBot::LoadStats()
 	while(const char *pLine = Reader.Get())
 	{
 		int Version = 0;
+		if(std::sscanf(pLine, "v%d %d %d %d %d %d %d %d %d %f %f", &Version, &m_Episodes, &m_StartCount, &m_FinishCount, &m_DeathCount, &m_RewardedPathSteps, &m_OffRouteSteps, &m_SafeFreezeSteps, &m_RewardNetUpdates, &m_BestRaceProgress, &m_BestRaceReward) == 11 && Version == 3)
+			continue;
 		if(std::sscanf(pLine, "v%d %d %d %d %d %d %d %d %d", &Version, &m_Episodes, &m_StartCount, &m_FinishCount, &m_DeathCount, &m_RewardedPathSteps, &m_OffRouteSteps, &m_SafeFreezeSteps, &m_RewardNetUpdates) == 9 && Version == 2)
 			continue;
 		if(std::sscanf(pLine, "v%d %d %d %d %d %d %d %d", &Version, &m_Episodes, &m_FinishCount, &m_DeathCount, &m_RewardedPathSteps, &m_OffRouteSteps, &m_SafeFreezeSteps, &m_RewardNetUpdates) == 8 && Version == 1)
@@ -620,13 +688,24 @@ void CAIBot::SaveStats() const
 	}
 
 	char aLine[256];
-	str_format(aLine, sizeof(aLine), "v2 %d %d %d %d %d %d %d %d\n", m_Episodes, m_StartCount, m_FinishCount, m_DeathCount, m_RewardedPathSteps, m_OffRouteSteps, m_SafeFreezeSteps, m_RewardNetUpdates);
+	str_format(aLine, sizeof(aLine), "v3 %d %d %d %d %d %d %d %d %.6f %.6f\n", m_Episodes, m_StartCount, m_FinishCount, m_DeathCount, m_RewardedPathSteps, m_OffRouteSteps, m_SafeFreezeSteps, m_RewardNetUpdates, m_BestRaceProgress, m_BestRaceReward);
 	io_write(File, aLine, str_length(aLine));
 	str_format(aLine, sizeof(aLine), "reward %.6f\n", m_TotalTrainingReward);
 	io_write(File, aLine, str_length(aLine));
 	str_format(aLine, sizeof(aLine), "net %.8f %.8f %.8f %.8f %.8f %.8f\n", m_aRewardNetWeights[0], m_aRewardNetWeights[1], m_aRewardNetWeights[2], m_aRewardNetWeights[3], m_aRewardNetWeights[4], m_aRewardNetWeights[5]);
 	io_write(File, aLine, str_length(aLine));
 	io_close(File);
+}
+
+void CAIBot::MaybeSaveProgress(int Tick, bool Force)
+{
+	// Saving once every five seconds keeps the current map's learned penalties
+	// and reward net durable without writing on every simulation tick.
+	if(!m_aMapName[0] || (!Force && Tick - m_LastPersistenceTick < 250))
+		return;
+	m_LastPersistenceTick = Tick;
+	SaveLearning();
+	SaveStats();
 }
 
 void CAIBot::OnRender()
@@ -641,7 +720,7 @@ void CAIBot::OnRender()
 		{
 			if(m_FinishCrossed)
 				SaveStats();
-			else
+			else if(!m_ResetRequested)
 				RegisterFailure();
 			ResetEpisode();
 		}
@@ -656,6 +735,11 @@ void CAIBot::OnRender()
 		m_LastProgressCell = CurrentCell;
 
 	const int Tick = Client()->GameTick(g_Config.m_ClDummy);
+	if(HandleFreeze(CurrentCell, Tick))
+	{
+		MaybeSaveProgress(Tick, true);
+		return;
+	}
 	if((m_ForceReplan || m_vRoute.empty()) && Tick - m_LastPlanTick >= 10)
 	{
 		m_LastPlanTick = Tick;
@@ -675,13 +759,14 @@ void CAIBot::OnRender()
 		BuildRoute(CurrentCell, GoalCell, pGoalName);
 	}
 	UpdateReward(CurrentCell, Tick);
+	MaybeSaveProgress(Tick);
 }
 
 bool CAIBot::ApplyInput(CNetObj_PlayerInput &Input)
 {
 	if(!g_Config.m_TcAiBot || !EnsureMap())
 		return false;
-	if(m_FinishCrossed)
+	if(m_FinishCrossed || m_ResetRequested)
 		return false;
 
 	const CNetObj_Character *pCharacter = GameClient()->m_Snap.m_pLocalCharacter;
