@@ -30,6 +30,12 @@ public:
 	int LearnedSuccesses() const { return (int)m_SuccessCount.size(); }
 	int LastFailureTrail() const { return m_LastFailureTrail; }
 	int RouteRiskTiles() const { return m_RouteRiskTiles; }
+	int InputStates() const { return (int)m_InputVariants.size(); }
+	int InputTrials() const { return m_InputTrials; }
+	int InputExplorations() const { return m_InputExplorations; }
+	int ActiveInputVariant() const { return m_ActiveInputVariant; }
+	const char *ActiveInputVariantName() const;
+	bool ActiveInputIsExploring() const { return m_ActiveInputExploring; }
 	int RouteProgressNodes() const { return m_LastRewardRouteIndex + 1; }
 	float RouteProgressPercent() const;
 	float CurrentReward() const { return m_CurrentReward; }
@@ -65,6 +71,11 @@ private:
 	int RewardRouteIndexForCell(int Cell) const;
 	int LearnedRisk(int Cell) const;
 	int LearnedSuccessBonus(int Cell) const;
+	unsigned long long InputStateKey(int TargetCell, bool NeedJump, bool NeedHook) const;
+	int ChooseInputVariant(unsigned long long StateKey, bool &Exploring) const;
+	int BeginInputTrial(unsigned long long StateKey, int Tick);
+	void RecordInputSuccess();
+	void RecordInputFailure();
 	int RawTile(int Cell) const;
 	int FrontRawTile(int Cell) const;
 	int CellFromPos(const vec2 &Pos) const;
@@ -87,6 +98,14 @@ private:
 	void MaybeSaveProgress(int Tick, bool Force = false);
 	void SetStatus(const char *pStatus);
 
+	static constexpr int INPUT_VARIANTS = 5;
+	struct SInputVariantStats
+	{
+		int m_Attempts = 0;
+		int m_Successes = 0;
+		int m_Failures = 0;
+	};
+
 	std::vector<int> m_vRoute;
 	// Fixed START -> FINISH reference route used only for reward. The movement
 	// route may be replanned from the current tee position without changing the
@@ -94,6 +113,7 @@ private:
 	std::vector<int> m_vRewardRoute;
 	std::unordered_map<int, int> m_FailureCost;
 	std::unordered_map<int, int> m_SuccessCount;
+	std::unordered_map<unsigned long long, std::array<SInputVariantStats, INPUT_VARIANTS>> m_InputVariants;
 	// The last unique cells actually travelled in this episode. A failure is
 	// normally caused by an approach, not one isolated tile, so this trail is
 	// what gets penalized and makes the next A* route meaningfully change.
@@ -123,6 +143,11 @@ private:
 	int m_RewardNetUpdates = 0;
 	int m_LastFailureTrail = 0;
 	int m_RouteRiskTiles = 0;
+	int m_InputTrials = 0;
+	int m_InputExplorations = 0;
+	int m_ActiveInputVariant = -1;
+	int m_ActiveInputStartTick = -1000000;
+	unsigned long long m_ActiveInputState = 0;
 	float m_CurrentReward = -1.0f;
 	float m_LastTrainingReward = 0.0f;
 	float m_TotalTrainingReward = 0.0f;
@@ -137,6 +162,9 @@ private:
 	bool m_RaceStarted = false;
 	bool m_FinishCrossed = false;
 	bool m_RouteUsesFreeze = false;
+	bool m_HasActiveInput = false;
+	bool m_ActiveInputResolved = false;
+	bool m_ActiveInputExploring = false;
 	bool m_ForceReplan = true;
 	char m_aMapName[128] = {};
 	char m_aStatus[128] = "Waiting for a map";
