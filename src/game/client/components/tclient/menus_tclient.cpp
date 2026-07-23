@@ -401,6 +401,9 @@ void CMenus::RenderSettingsTClientAIBot(CUIRect MainView)
 	str_format(aStatus, sizeof(aStatus), "Phase: %s | Route: %d/%d (%.1f%%) | danger: %d | proven safe: %d", GameClient()->m_AIBot.PhaseName(), GameClient()->m_AIBot.RouteProgressNodes(), GameClient()->m_AIBot.PlannedNodes(), GameClient()->m_AIBot.RouteProgressPercent(), GameClient()->m_AIBot.LearnedFailures(), GameClient()->m_AIBot.LearnedSuccesses());
 	MainView.HSplitTop(LineSize, &Label, &MainView);
 	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
+	str_format(aStatus, sizeof(aStatus), "Input learner: %d states | %d trials | exploration: %d | active: %s%s", GameClient()->m_AIBot.InputStates(), GameClient()->m_AIBot.InputTrials(), GameClient()->m_AIBot.InputExplorations(), GameClient()->m_AIBot.ActiveInputVariantName(), GameClient()->m_AIBot.ActiveInputIsExploring() ? "*" : "");
+	MainView.HSplitTop(LineSize, &Label, &MainView);
+	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
 	str_format(aStatus, sizeof(aStatus), "Current reward: %.2f | last training reward: %.2f | reward net: %.2f", GameClient()->m_AIBot.CurrentReward(), GameClient()->m_AIBot.LastTrainingReward(), GameClient()->m_AIBot.RewardNetEstimate());
 	MainView.HSplitTop(LineSize, &Label, &MainView);
 	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
@@ -425,7 +428,7 @@ void CMenus::RenderSettingsTClientAIBot(CUIRect MainView)
 	MainView.HSplitTop(LineSize, &Button, &MainView);
 	Button.VSplitLeft(180.0f, &Button, nullptr);
 	static CButtonContainer s_ClearLearningButton;
-	if(DoButton_Menu(&s_ClearLearningButton, "Clear map learning", 0, &Button))
+	if(DoButton_Menu(&s_ClearLearningButton, "Clear route and input learning", 0, &Button))
 		GameClient()->m_AIBot.ClearLearning();
 }
 
