@@ -385,6 +385,7 @@ void CMenus::RenderSettingsTClientAIBot(CUIRect MainView)
 
 	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBot, "Enable AIBot", &g_Config.m_TcAiBot, &MainView, LineSize);
 	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBotAllowFreeze, "Allow safe routes through freeze", &g_Config.m_TcAiBotAllowFreeze, &MainView, LineSize);
+	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBotResetUnsafeFreeze, "Reset only from unsafe freeze", &g_Config.m_TcAiBotResetUnsafeFreeze, &MainView, LineSize);
 	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBotUseHook, "Use hook on upward route segments", &g_Config.m_TcAiBotUseHook, &MainView, LineSize);
 
 	MainView.HSplitTop(Margin, nullptr, &MainView);
@@ -406,6 +407,9 @@ void CMenus::RenderSettingsTClientAIBot(CUIRect MainView)
 	MainView.HSplitTop(LineSize, &Label, &MainView);
 	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
 	str_format(aStatus, sizeof(aStatus), "Correct A* steps: %d | off-route steps: %d | total training reward: %.1f", GameClient()->m_AIBot.RewardedPathSteps(), GameClient()->m_AIBot.OffRouteSteps(), GameClient()->m_AIBot.TotalTrainingReward());
+	MainView.HSplitTop(LineSize, &Label, &MainView);
+	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
+	str_format(aStatus, sizeof(aStatus), "Saved per-map memory: best route %.1f%% | best reward %.1f | autosave every 5 seconds", GameClient()->m_AIBot.BestRaceProgressPercent(), GameClient()->m_AIBot.BestRaceReward());
 	MainView.HSplitTop(LineSize, &Label, &MainView);
 	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
 
