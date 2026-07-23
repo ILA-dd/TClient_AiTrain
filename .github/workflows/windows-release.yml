@@ -22,6 +22,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++-mingw-w64-x86-64
 
+      - name: Install Rust Windows target
+        run: rustup target add x86_64-pc-windows-gnu
+
       - name: Configure release
         run: >
           cmake -S . -B build-windows-release -G Ninja
