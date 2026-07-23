@@ -285,6 +285,7 @@ MACRO_CONFIG_INT(TcShowhudDummyAngle, tc_showhud_dummy_angle, 0, 0, 1, CFGFLAG_C
 
 // AIBot
 MACRO_CONFIG_INT(TcAiBot, tc_aibot, 0, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Enable the AIBot path follower")
+MACRO_CONFIG_INT(TcAiBotHud, tc_aibot_hud, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Show AIBot training statistics in the game HUD")
 MACRO_CONFIG_INT(TcAiBotAllowFreeze, tc_aibot_allow_freeze, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Allow AIBot routes through freeze when a safe platform is below")
 MACRO_CONFIG_INT(TcAiBotResetUnsafeFreeze, tc_aibot_reset_unsafe_freeze, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Restart AIBot after entering freeze without a safe platform below")
 MACRO_CONFIG_INT(TcAiBotUnsafeFreezeDelay, tc_aibot_unsafe_freeze_delay, 12, 1, 100, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Ticks AIBot waits before restarting from unsafe freeze")
