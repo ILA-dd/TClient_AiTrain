@@ -293,4 +293,7 @@ MACRO_CONFIG_INT(TcAiBotSafeFreezeEscapeDelay, tc_aibot_safe_freeze_escape_delay
 MACRO_CONFIG_INT(TcAiBotUseHook, tc_aibot_use_hook, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Let AIBot use the hook for upward route segments")
 MACRO_CONFIG_INT(TcAiBotFreezeDropTiles, tc_aibot_freeze_drop_tiles, 6, 1, 32, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Maximum fall depth that AIBot considers safe after entering freeze")
 MACRO_CONFIG_INT(TcAiBotFreezePenalty, tc_aibot_freeze_penalty, 50, 1, 500, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Extra A* route cost for a safe freeze tile")
+MACRO_CONFIG_INT(TcAiBotFailurePenalty, tc_aibot_failure_penalty, 20, 1, 200, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Extra A* route cost per learned dangerous trajectory point")
+MACRO_CONFIG_INT(TcAiBotSuccessBonus, tc_aibot_success_bonus, 3, 0, 20, CFGFLAG_CLIENT | CFGFLAG_SAVE, "A* route bonus per successfully traversed map cell")
+MACRO_CONFIG_INT(TcAiBotFailureTrail, tc_aibot_failure_trail, 8, 1, 32, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Unique recently travelled cells remembered when an AIBot attempt fails")
 MACRO_CONFIG_INT(TcAiBotMaxNodes, tc_aibot_max_nodes, 20000, 1000, 100000, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Maximum nodes expanded by AIBot A* per route")
