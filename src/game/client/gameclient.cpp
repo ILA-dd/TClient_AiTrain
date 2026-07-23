@@ -143,6 +143,7 @@ void CGameClient::OnConsoleInit()
 					      &m_Translate, // TClient
 					      &m_Ghost,
 					      &m_TClient, // TClient (Must be before chat and players)
+					      &m_AIBot,
 					      &m_Players,
 						  &m_MovingTilesBackground, // TClient
 						  &m_MapLayersForeground,

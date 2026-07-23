@@ -282,3 +282,11 @@ MACRO_CONFIG_INT(TcUiCompactList, tc_ui_compact_list, 0, 0, 1, CFGFLAG_CLIENT | 
 MACRO_CONFIG_INT(TcShowhudDummyPosition, tc_showhud_dummy_position, 0, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Show ingame HUD (Dummy Position)")
 MACRO_CONFIG_INT(TcShowhudDummySpeed, tc_showhud_dummy_speed, 0, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Show ingame HUD (Dummy Speed)")
 MACRO_CONFIG_INT(TcShowhudDummyAngle, tc_showhud_dummy_angle, 0, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Show ingame HUD (Dummy Aim Angle)")
+
+// AIBot
+MACRO_CONFIG_INT(TcAiBot, tc_aibot, 0, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Enable the AIBot path follower")
+MACRO_CONFIG_INT(TcAiBotAllowFreeze, tc_aibot_allow_freeze, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Allow AIBot routes through freeze when a safe platform is below")
+MACRO_CONFIG_INT(TcAiBotUseHook, tc_aibot_use_hook, 1, 0, 1, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Let AIBot use the hook for upward route segments")
+MACRO_CONFIG_INT(TcAiBotFreezeDropTiles, tc_aibot_freeze_drop_tiles, 6, 1, 32, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Maximum fall depth that AIBot considers safe after entering freeze")
+MACRO_CONFIG_INT(TcAiBotFreezePenalty, tc_aibot_freeze_penalty, 50, 1, 500, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Extra A* route cost for a safe freeze tile")
+MACRO_CONFIG_INT(TcAiBotMaxNodes, tc_aibot_max_nodes, 20000, 1000, 100000, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Maximum nodes expanded by AIBot A* per route")

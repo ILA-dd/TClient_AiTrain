@@ -846,6 +846,7 @@ private:
 	// found in menus_tclient.cpp
 	void RenderSettingsTClient(CUIRect MainView);
 	void RenderSettingsTClientSettings(CUIRect MainView);
+	void RenderSettingsTClientAIBot(CUIRect MainView);
 	void RenderSettingsTClientBindWheel(CUIRect MainView);
 	void RenderSettingsTClientChatBinds(CUIRect MainView);
 	void RenderSettingsTClientWarList(CUIRect MainView);

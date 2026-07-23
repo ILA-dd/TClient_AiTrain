@@ -40,6 +40,7 @@
 enum
 {
 	TCLIENT_TAB_SETTINGS = 0,
+	TCLIENT_TAB_AIBOT,
 	TCLIENT_TAB_BINDWHEEL,
 	TCLIENT_TAB_WARLIST,
 	TCLIENT_TAB_BINDCHAT,
@@ -338,6 +339,7 @@ void CMenus::RenderSettingsTClient(CUIRect MainView)
 	static CButtonContainer s_aPageTabs[NUMBER_OF_TCLIENT_TABS] = {};
 	const char *apTabNames[] = {
 		TCLocalize("Settings"),
+		"AIBot",
 		TCLocalize("Bind Wheel"),
 		TCLocalize("War List"),
 		TCLocalize("Chat Binds"),
@@ -360,6 +362,8 @@ void CMenus::RenderSettingsTClient(CUIRect MainView)
 
 	if(s_CurCustomTab == TCLIENT_TAB_SETTINGS)
 		RenderSettingsTClientSettings(MainView);
+	if(s_CurCustomTab == TCLIENT_TAB_AIBOT)
+		RenderSettingsTClientAIBot(MainView);
 	if(s_CurCustomTab == TCLIENT_TAB_BINDCHAT)
 		RenderSettingsTClientChatBinds(MainView);
 	if(s_CurCustomTab == TCLIENT_TAB_BINDWHEEL)
@@ -370,6 +374,45 @@ void CMenus::RenderSettingsTClient(CUIRect MainView)
 		RenderSettingsTClientStatusBar(MainView);
 	if(s_CurCustomTab == TCLIENT_TAB_INFO)
 		RenderSettingsTClientInfo(MainView);
+}
+
+void CMenus::RenderSettingsTClientAIBot(CUIRect MainView)
+{
+	CUIRect Label, Button;
+	MainView.HSplitTop(HeadlineHeight, &Label, &MainView);
+	Ui()->DoLabel(&Label, "AIBot - map-aware pathfinder trainer", HeadlineFontSize, TEXTALIGN_ML);
+	MainView.HSplitTop(MarginSmall, nullptr, &MainView);
+
+	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBot, "Enable AIBot", &g_Config.m_TcAiBot, &MainView, LineSize);
+	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBotAllowFreeze, "Allow safe routes through freeze", &g_Config.m_TcAiBotAllowFreeze, &MainView, LineSize);
+	DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_TcAiBotUseHook, "Use hook on upward route segments", &g_Config.m_TcAiBotUseHook, &MainView, LineSize);
+
+	MainView.HSplitTop(Margin, nullptr, &MainView);
+	MainView.HSplitTop(HeadlineHeight, &Label, &MainView);
+	Ui()->DoLabel(&Label, "A* learns failed tiles per map and avoids them on the next route.", StandardFontSize, TEXTALIGN_ML);
+	MainView.HSplitTop(MarginSmall, nullptr, &MainView);
+
+	char aStatus[256];
+	str_format(aStatus, sizeof(aStatus), "Status: %s", GameClient()->m_AIBot.Status());
+	MainView.HSplitTop(LineSize, &Label, &MainView);
+	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
+	str_format(aStatus, sizeof(aStatus), "Route nodes: %d | learned failed tiles: %d", GameClient()->m_AIBot.PlannedNodes(), GameClient()->m_AIBot.LearnedFailures());
+	MainView.HSplitTop(LineSize, &Label, &MainView);
+	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
+
+	MainView.HSplitTop(Margin, nullptr, &MainView);
+	MainView.HSplitTop(LineSize, &Button, &MainView);
+	Button.VSplitLeft(180.0f, &Button, nullptr);
+	static CButtonContainer s_ReplanButton;
+	if(DoButton_Menu(&s_ReplanButton, "Rebuild A* route", 0, &Button))
+		GameClient()->m_AIBot.ForceReplan();
+
+	MainView.HSplitTop(MarginSmall, nullptr, &MainView);
+	MainView.HSplitTop(LineSize, &Button, &MainView);
+	Button.VSplitLeft(180.0f, &Button, nullptr);
+	static CButtonContainer s_ClearLearningButton;
+	if(DoButton_Menu(&s_ClearLearningButton, "Clear map learning", 0, &Button))
+		GameClient()->m_AIBot.ClearLearning();
 }
 
 void CMenus::RenderSettingsTClientSettings(CUIRect MainView)
@@ -2181,12 +2224,14 @@ void CMenus::RenderSettingsTClientInfo(CUIRect MainView)
 
 	const char *apTabNames[] = {
 		TCLocalize("Settings"),
+		"AIBot",
 		TCLocalize("Bind Wheel"),
 		TCLocalize("War List"),
 		TCLocalize("Chat Binds"),
 		TCLocalize("Status Bar"),
 		TCLocalize("Info")};
 	static int s_aShowTabs[NUMBER_OF_TCLIENT_TABS] = {};
+	// Keep the Info tab visible so the tab bar can never become empty.
 	for(int i = 0; i < NUMBER_OF_TCLIENT_TABS - 1; ++i)
 	{
 		DoButton_CheckBoxAutoVMarginAndSet(&s_aShowTabs[i], apTabNames[i], &s_aShowTabs[i], i % 2 == 0 ? &LeftSettings : &RightSettings, LineSize);

@@ -69,6 +69,7 @@
 #include "components/tclient/bindchat.h"
 #include "components/tclient/bindwheel.h"
 #include "components/tclient/custom_communities.h"
+#include "components/tclient/aibot.h"
 #include "components/tclient/mod.h"
 #include "components/tclient/moving_tiles.h"
 #include "components/tclient/mumble.h"
@@ -232,6 +233,7 @@ public:
 	CScripting m_Scripting;
 	CMod m_Mod;
 	CCustomCommunities m_CustomCommunities;
+	CAIBot m_AIBot;
 	CMovingTiles m_MovingTilesBackground = CMovingTiles{ false };
 	CMovingTiles m_MovingTilesForeground = CMovingTiles{ true };
 

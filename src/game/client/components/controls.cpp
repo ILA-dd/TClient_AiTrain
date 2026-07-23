@@ -340,6 +340,10 @@ int CControls::SnapInput(int *pData)
 			m_aInputData[g_Config.m_ClDummy].m_TargetY = (int)(std::cos(t * 3) * 100.0f);
 		}
 
+		// AIBot runs after regular key handling, so disabling it immediately
+		// restores the player's own controls without resetting any binds.
+		GameClient()->m_AIBot.ApplyInput(m_aInputData[g_Config.m_ClDummy]);
+
 		// check if we need to send input
 		Send = Send || m_aInputData[g_Config.m_ClDummy].m_Direction != m_aLastData[g_Config.m_ClDummy].m_Direction;
 		Send = Send || m_aInputData[g_Config.m_ClDummy].m_Jump != m_aLastData[g_Config.m_ClDummy].m_Jump;
