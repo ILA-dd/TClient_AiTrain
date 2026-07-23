@@ -391,14 +391,14 @@ void CMenus::RenderSettingsTClientAIBot(CUIRect MainView)
 
 	MainView.HSplitTop(Margin, nullptr, &MainView);
 	MainView.HSplitTop(HeadlineHeight, &Label, &MainView);
-	Ui()->DoLabel(&Label, "Reward is negative before START, resets to zero on START, then grows only along the safe A* route.", StandardFontSize, TEXTALIGN_ML);
+	Ui()->DoLabel(&Label, "A* avoids learned failed approaches first; safe cells are preferred only when they still lead to the goal.", StandardFontSize, TEXTALIGN_ML);
 	MainView.HSplitTop(MarginSmall, nullptr, &MainView);
 
 	char aStatus[256];
 	str_format(aStatus, sizeof(aStatus), "Status: %s", GameClient()->m_AIBot.Status());
 	MainView.HSplitTop(LineSize, &Label, &MainView);
 	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
-	str_format(aStatus, sizeof(aStatus), "Phase: %s | Route: %d/%d (%.1f%%) | learned failed tiles: %d", GameClient()->m_AIBot.PhaseName(), GameClient()->m_AIBot.RouteProgressNodes(), GameClient()->m_AIBot.PlannedNodes(), GameClient()->m_AIBot.RouteProgressPercent(), GameClient()->m_AIBot.LearnedFailures());
+	str_format(aStatus, sizeof(aStatus), "Phase: %s | Route: %d/%d (%.1f%%) | danger: %d | proven safe: %d", GameClient()->m_AIBot.PhaseName(), GameClient()->m_AIBot.RouteProgressNodes(), GameClient()->m_AIBot.PlannedNodes(), GameClient()->m_AIBot.RouteProgressPercent(), GameClient()->m_AIBot.LearnedFailures(), GameClient()->m_AIBot.LearnedSuccesses());
 	MainView.HSplitTop(LineSize, &Label, &MainView);
 	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
 	str_format(aStatus, sizeof(aStatus), "Current reward: %.2f | last training reward: %.2f | reward net: %.2f", GameClient()->m_AIBot.CurrentReward(), GameClient()->m_AIBot.LastTrainingReward(), GameClient()->m_AIBot.RewardNetEstimate());
@@ -407,7 +407,7 @@ void CMenus::RenderSettingsTClientAIBot(CUIRect MainView)
 	str_format(aStatus, sizeof(aStatus), "Episodes: %d | starts: %d | finishes: %d | deaths: %d | net updates: %d", GameClient()->m_AIBot.Episodes(), GameClient()->m_AIBot.StartCount(), GameClient()->m_AIBot.FinishCount(), GameClient()->m_AIBot.DeathCount(), GameClient()->m_AIBot.RewardNetUpdates());
 	MainView.HSplitTop(LineSize, &Label, &MainView);
 	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
-	str_format(aStatus, sizeof(aStatus), "Correct A* steps: %d | off-route steps: %d | total training reward: %.1f", GameClient()->m_AIBot.RewardedPathSteps(), GameClient()->m_AIBot.OffRouteSteps(), GameClient()->m_AIBot.TotalTrainingReward());
+	str_format(aStatus, sizeof(aStatus), "Correct A* steps: %d | off-route: %d | current route risk: %d | last failure trail: %d", GameClient()->m_AIBot.RewardedPathSteps(), GameClient()->m_AIBot.OffRouteSteps(), GameClient()->m_AIBot.RouteRiskTiles(), GameClient()->m_AIBot.LastFailureTrail());
 	MainView.HSplitTop(LineSize, &Label, &MainView);
 	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
 	str_format(aStatus, sizeof(aStatus), "Saved per-map memory: best route %.1f%% | best reward %.1f | autosave every 5 seconds", GameClient()->m_AIBot.BestRaceProgressPercent(), GameClient()->m_AIBot.BestRaceReward());
