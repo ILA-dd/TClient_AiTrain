@@ -46,8 +46,9 @@ public:
 
 private:
 	bool EnsureMap();
-	bool BuildRoute(int StartCell, int GoalCell, const char *pGoalName);
+	bool BuildRoute(int StartCell, int GoalCell, const char *pGoalName, bool AllowFreeze);
 	bool IsWalkable(int Cell) const;
+	bool IsPathable(int Cell, bool AllowFreeze) const;
 	bool IsSolid(int Cell) const;
 	bool IsDeath(int Cell) const;
 	bool IsFreeze(int Cell) const;
@@ -58,6 +59,7 @@ private:
 	int FindStart() const;
 	int FindFinish() const;
 	int RouteIndexForCell(int Cell) const;
+	int RewardRouteIndexForCell(int Cell) const;
 	int RawTile(int Cell) const;
 	int FrontRawTile(int Cell) const;
 	int CellFromPos(const vec2 &Pos) const;
@@ -78,6 +80,10 @@ private:
 	void SetStatus(const char *pStatus);
 
 	std::vector<int> m_vRoute;
+	// Fixed START -> FINISH reference route used only for reward. The movement
+	// route may be replanned from the current tee position without changing the
+	// meaning of 0% or 100% progress.
+	std::vector<int> m_vRewardRoute;
 	std::unordered_map<int, int> m_FailureCost;
 	int m_MapWidth = 0;
 	int m_MapHeight = 0;
@@ -115,6 +121,7 @@ private:
 	bool m_ResetSawNoCharacter = false;
 	bool m_RaceStarted = false;
 	bool m_FinishCrossed = false;
+	bool m_RouteUsesFreeze = false;
 	bool m_ForceReplan = true;
 	char m_aMapName[128] = {};
 	char m_aStatus[128] = "Waiting for a map";
