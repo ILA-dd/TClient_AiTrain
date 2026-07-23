@@ -58,6 +58,7 @@ bool IsDeathTile(int Tile)
 void CAIBot::OnReset()
 {
 	m_vRoute.clear();
+	m_RouteUsesFreeze = false;
 	m_FailureCost.clear();
 	m_MapWidth = 0;
 	m_MapHeight = 0;
@@ -117,6 +118,7 @@ bool CAIBot::EnsureMap()
 	m_MapWidth = Collision()->GetWidth();
 	m_MapHeight = Collision()->GetHeight();
 	m_vRoute.clear();
+	m_RouteUsesFreeze = false;
 	m_FailureCost.clear();
 	m_GoalCell = -1;
 	m_RouteIndex = 0;
@@ -160,9 +162,10 @@ vec2 CAIBot::CellCenter(int Cell) const
 
 float CAIBot::RouteProgressPercent() const
 {
-	if(m_vRoute.size() < 2 || m_LastRewardRouteIndex < 0)
+	const std::vector<int> &vProgressRoute = m_RaceStarted && !m_vRewardRoute.empty() ? m_vRewardRoute : m_vRoute;
+	if(vProgressRoute.size() < 2 || m_LastRewardRouteIndex < 0)
 		return 0.0f;
-	return 100.0f * std::clamp((float)m_LastRewardRouteIndex / (float)(m_vRoute.size() - 1), 0.0f, 1.0f);
+	return 100.0f * std::clamp((float)m_LastRewardRouteIndex / (float)(vProgressRoute.size() - 1), 0.0f, 1.0f);
 }
 
 int CAIBot::RawTile(int Cell) const
@@ -229,9 +232,14 @@ bool CAIBot::CanSurviveFreeze(int Cell) const
 
 bool CAIBot::IsWalkable(int Cell) const
 {
+	return IsPathable(Cell, g_Config.m_TcAiBotAllowFreeze != 0);
+}
+
+bool CAIBot::IsPathable(int Cell, bool AllowFreeze) const
+{
 	if(IsSolid(Cell) || IsDeath(Cell) || IsDeepFreeze(Cell))
 		return false;
-	if(IsFreeze(Cell) && (!g_Config.m_TcAiBotAllowFreeze || !CanSurviveFreeze(Cell)))
+	if(IsFreeze(Cell) && (!AllowFreeze || !CanSurviveFreeze(Cell)))
 		return false;
 	return true;
 }
@@ -272,18 +280,45 @@ int CAIBot::RouteIndexForCell(int Cell) const
 	return -1;
 }
 
-bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName)
+int CAIBot::RewardRouteIndexForCell(int Cell) const
+{
+	if(Cell < 0 || m_vRewardRoute.empty())
+		return -1;
+
+	// Physics does not move one tile at a time. Match the nearest node in a
+	// small one-tile radius so a normal jump or fast horizontal move still gets
+	// credit for its actual START -> FINISH progress.
+	const int CellX = Cell % m_MapWidth;
+	const int CellY = Cell / m_MapWidth;
+	int BestIndex = -1;
+	int BestDistance = 2;
+	for(int Index = 0; Index < (int)m_vRewardRoute.size(); ++Index)
+	{
+		const int RouteCell = m_vRewardRoute[Index];
+		const int Distance = std::abs(RouteCell % m_MapWidth - CellX) + std::abs(RouteCell / m_MapWidth - CellY);
+		if(Distance < BestDistance || (Distance == BestDistance && BestIndex >= 0 && Index > BestIndex))
+		{
+			BestDistance = Distance;
+			BestIndex = Index;
+		}
+	}
+	return BestIndex;
+}
+
+bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName, bool AllowFreeze)
 {
 	m_GoalCell = GoalCell;
 	if(GoalCell < 0)
 	{
 		m_vRoute.clear();
+		m_RouteUsesFreeze = false;
 		str_format(m_aStatus, sizeof(m_aStatus), "No %s tile on this map", pGoalName);
 		return false;
 	}
-	if(StartCell < 0 || !IsWalkable(StartCell))
+	if(StartCell < 0 || !IsPathable(StartCell, AllowFreeze))
 	{
 		m_vRoute.clear();
+		m_RouteUsesFreeze = false;
 		SetStatus("Current position is not pathable");
 		return false;
 	}
@@ -325,7 +360,7 @@ bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName)
 			if(NextX < 0 || NextX >= m_MapWidth || NextY < 0 || NextY >= m_MapHeight)
 				continue;
 			const int Next = NextY * m_MapWidth + NextX;
-			if(!IsWalkable(Next))
+			if(!IsPathable(Next, AllowFreeze))
 				continue;
 
 			int StepCost = 10;
@@ -347,6 +382,7 @@ bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName)
 	if(vPrevious[GoalCell] == -1 && GoalCell != StartCell)
 	{
 		m_vRoute.clear();
+		m_RouteUsesFreeze = false;
 		str_format(m_aStatus, sizeof(m_aStatus), "A* stopped after %d nodes", Expanded);
 		return false;
 	}
@@ -355,13 +391,18 @@ bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName)
 	for(int Cell = GoalCell; Cell != -1; Cell = vPrevious[Cell])
 	m_vRoute.push_back(Cell);
 	std::reverse(m_vRoute.begin(), m_vRoute.end());
+	m_RouteUsesFreeze = std::any_of(m_vRoute.begin(), m_vRoute.end(), [this](int Cell) { return IsFreeze(Cell); });
+	if(m_RaceStarted && m_vRewardRoute.empty())
+		m_vRewardRoute = m_vRoute;
 	m_RouteIndex = 0;
-	str_format(m_aStatus, sizeof(m_aStatus), "A* to %s: %d nodes, %d checked", pGoalName, (int)m_vRoute.size(), Expanded);
+	str_format(m_aStatus, sizeof(m_aStatus), AllowFreeze ? "A* to %s: safe-freeze fallback, %d nodes" : "A* to %s: freeze-free, %d nodes", pGoalName, (int)m_vRoute.size());
 	return true;
 }
 
 void CAIBot::ResetEpisode()
 {
+	m_vRewardRoute.clear();
+	m_RouteUsesFreeze = false;
 	m_LastRewardCell = -1;
 	m_LastRewardRouteIndex = -1;
 	m_LastRewardTick = -1000000;
@@ -444,8 +485,9 @@ const char *CAIBot::PhaseName() const
 std::array<float, 6> CAIBot::RewardFeatures(int Cell, int RouteIndex, bool OnRoute, bool Safe, bool Finished) const
 {
 	float Progress = 0.0f;
-	if(RouteIndex >= 0 && m_vRoute.size() > 1)
-		Progress = std::clamp((float)RouteIndex / (float)(m_vRoute.size() - 1), 0.0f, 1.0f);
+	const std::vector<int> &vProgressRoute = m_RaceStarted && !m_vRewardRoute.empty() ? m_vRewardRoute : m_vRoute;
+	if(RouteIndex >= 0 && vProgressRoute.size() > 1)
+		Progress = std::clamp((float)RouteIndex / (float)(vProgressRoute.size() - 1), 0.0f, 1.0f);
 
 	return {1.0f, Progress, OnRoute ? 1.0f : 0.0f, Safe ? 1.0f : 0.0f, Finished ? 1.0f : 0.0f, IsFreeze(Cell) ? 1.0f : 0.0f};
 }
@@ -485,20 +527,22 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 	const bool Safe = IsWalkable(CurrentCell);
 	const bool Start = IsStart(CurrentCell);
 	const bool Finish = IsFinish(CurrentCell);
-	const int RouteIndex = RouteIndexForCell(CurrentCell);
+	const int RouteIndex = m_RaceStarted ? RewardRouteIndexForCell(CurrentCell) : RouteIndexForCell(CurrentCell);
 	const bool OnRoute = RouteIndex >= 0;
 
 	if(m_FinishCrossed)
 		return;
 
-	// A race has two different objectives. Before START, the displayed reward
-	// remains negative and approaches zero only while the tee follows A* to the
-	// start tile. On START, it is reset to zero and the finish run begins.
+	// A race has two deliberately separate scales:
+	// - before START: -100 at the far end of the A* route, increasing to 0;
+	// - after START: 0, then +0..+100 by fixed START -> FINISH route percent.
+	// The visible reward is therefore never deducted for valid forward movement.
 	if(!m_RaceStarted)
 	{
 		if(Start)
 		{
 			m_RaceStarted = true;
+			m_vRewardRoute.clear();
 			m_CurrentReward = 0.0f;
 			m_LastTrainingReward = 0.0f;
 			m_LastRewardCell = -1;
@@ -513,17 +557,19 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 		if(CurrentCell == m_LastRewardCell)
 			return;
 
-		if(OnRoute)
+		if(OnRoute && m_vRoute.size() > 1)
 		{
-			const int Remaining = (int)m_vRoute.size() - RouteIndex - 1;
-			m_CurrentReward = -(float)std::max(1, Remaining + 1);
-			m_LastTrainingReward = m_LastRewardRouteIndex >= 0 && RouteIndex > m_LastRewardRouteIndex ? 0.25f : -0.25f;
+			const float Progress = std::clamp((float)RouteIndex / (float)(m_vRoute.size() - 1), 0.0f, 1.0f);
+			const float NewReward = -100.0f * (1.0f - Progress);
+			const float Delta = NewReward - m_CurrentReward;
+			m_CurrentReward = NewReward;
+			m_LastTrainingReward = Delta > 0.0f ? Delta : Delta < 0.0f ? -1.0f : 0.0f;
 			m_LastRewardRouteIndex = RouteIndex;
 			m_RouteIndex = std::max(m_RouteIndex, RouteIndex);
 		}
 		else
 		{
-			m_CurrentReward = std::min(-1.0f, m_CurrentReward - 2.0f);
+			m_CurrentReward = -100.0f;
 			m_LastTrainingReward = -2.0f;
 			++m_OffRouteSteps;
 			m_ForceReplan = true;
@@ -538,8 +584,8 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 	if(Finish)
 	{
 		m_FinishCrossed = true;
-		m_LastTrainingReward = 20.0f;
-		m_CurrentReward += 100.0f;
+		m_LastTrainingReward = std::max(20.0f, 100.0f - m_CurrentReward);
+		m_CurrentReward = 100.0f;
 		m_BestRaceProgress = 1.0f;
 		m_BestRaceReward = std::max(m_BestRaceReward, m_CurrentReward);
 		m_TotalTrainingReward += m_LastTrainingReward;
@@ -553,47 +599,30 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 	if(CurrentCell == m_LastRewardCell)
 		return;
 
-	if(OnRoute)
+	if(OnRoute && m_vRewardRoute.size() > 1)
 	{
-		if(m_LastRewardRouteIndex < 0)
+		const float Progress = std::clamp((float)RouteIndex / (float)(m_vRewardRoute.size() - 1), 0.0f, 1.0f);
+		const float NewReward = 100.0f * Progress;
+		const float Gain = std::max(0.0f, NewReward - m_CurrentReward);
+		m_CurrentReward = std::max(m_CurrentReward, NewReward);
+		m_LastTrainingReward = Gain;
+		if(Gain > 0.0f)
 		{
-			// A route rebuild establishes a baseline; it must not reward standing
-			// on the same tile or let the bot farm replans.
-			m_LastTrainingReward = 0.0f;
-		}
-		else if(RouteIndex == m_LastRewardRouteIndex + 1 && Safe)
-		{
-			const float Progress = m_vRoute.size() > 1 ? (float)RouteIndex / (float)(m_vRoute.size() - 1) : 1.0f;
-			m_LastTrainingReward = 1.0f + 8.0f * Progress;
-			m_CurrentReward += m_LastTrainingReward;
 			++m_RewardedPathSteps;
 			if(IsFreeze(CurrentCell))
 				++m_SafeFreezeSteps;
 		}
-		else if(RouteIndex > m_LastRewardRouteIndex + 1)
-		{
-			m_LastTrainingReward = -3.0f;
-			m_CurrentReward -= 3.0f;
-			++m_OffRouteSteps;
-		}
-		else
-		{
-			m_LastTrainingReward = -1.0f;
-			m_CurrentReward -= 1.0f;
-		}
 
-		m_LastRewardRouteIndex = RouteIndex;
-		m_RouteIndex = std::max(m_RouteIndex, RouteIndex);
-		if(m_vRoute.size() > 1)
-			m_BestRaceProgress = std::max(m_BestRaceProgress, (float)RouteIndex / (float)(m_vRoute.size() - 1));
+		m_LastRewardRouteIndex = std::max(m_LastRewardRouteIndex, RouteIndex);
+		m_BestRaceProgress = std::max(m_BestRaceProgress, Progress);
 		m_BestRaceReward = std::max(m_BestRaceReward, m_CurrentReward);
 	}
 	else
 	{
-		m_CurrentReward -= 4.0f;
-		m_LastTrainingReward = -4.0f;
+		// Leaving the reward route is bad training data, but it must not make
+		// the displayed post-START reward negative or erase earned progress.
+		m_LastTrainingReward = -2.0f;
 		++m_OffRouteSteps;
-		m_LastRewardRouteIndex = -1;
 		m_ForceReplan = true;
 	}
 
@@ -606,12 +635,18 @@ void CAIBot::RegisterFailure()
 {
 	++m_DeathCount;
 	m_LastTrainingReward = m_RaceStarted ? -10.0f : -2.0f;
-	m_CurrentReward -= m_RaceStarted ? 10.0f : 2.0f;
+	// A failed run is negative training data, but the visible post-START scale
+	// remains 0..100. The next spawn starts the normal pre-START scale again.
+	if(m_RaceStarted)
+		m_CurrentReward = std::max(0.0f, m_CurrentReward);
+	else
+		m_CurrentReward -= 2.0f;
 	m_TotalTrainingReward += m_LastTrainingReward;
 	if(m_LastProgressCell >= 0)
 	{
 		++m_FailureCost[m_LastProgressCell];
-		TrainRewardNet(m_LastTrainingReward, RewardFeatures(m_LastProgressCell, RouteIndexForCell(m_LastProgressCell), false, false, false));
+		const int RouteIndex = m_RaceStarted ? RewardRouteIndexForCell(m_LastProgressCell) : RouteIndexForCell(m_LastProgressCell);
+		TrainRewardNet(m_LastTrainingReward, RewardFeatures(m_LastProgressCell, RouteIndex, false, false, false));
 	}
 	SaveLearning();
 	SaveStats();
@@ -687,6 +722,10 @@ void CAIBot::LoadStats()
 			continue;
 		std::sscanf(pLine, "net %f %f %f %f %f %f", &m_aRewardNetWeights[0], &m_aRewardNetWeights[1], &m_aRewardNetWeights[2], &m_aRewardNetWeights[3], &m_aRewardNetWeights[4], &m_aRewardNetWeights[5]);
 	}
+	// Builds before the fixed 0..100 scale could persist rewards above 100.
+	// Keep their failure memory and counters, but migrate display statistics.
+	m_BestRaceProgress = std::clamp(m_BestRaceProgress, 0.0f, 1.0f);
+	m_BestRaceReward = std::clamp(m_BestRaceReward, 0.0f, 100.0f);
 }
 
 void CAIBot::SaveStats() const
@@ -768,7 +807,7 @@ void CAIBot::RenderHud() const
 	if(m_ResetRequested)
 		str_format(aLine, sizeof(aLine), "Reset pending: retry %d", m_ResetRetries);
 	else
-		str_format(aLine, sizeof(aLine), "A* safe: %d  off: %d", RewardedPathSteps(), OffRouteSteps());
+		str_format(aLine, sizeof(aLine), m_RouteUsesFreeze ? "A*: freeze fallback  off: %d" : "A*: avoids freeze  off: %d", OffRouteSteps());
 	RenderLine(aLine);
 
 	TextRender()->TextColor(TextRender()->DefaultTextColor());
@@ -857,7 +896,11 @@ void CAIBot::OnRender()
 			pGoalName = "finish";
 			SetStatus("No start tile: racing from current position");
 		}
-		BuildRoute(CurrentCell, GoalCell, pGoalName);
+		// Safety comes first: a normal A* plan may not use any freeze tile. A
+		// survivable freeze is allowed only as a fallback for maps where there is
+		// no way to reach the goal without one.
+		if(!BuildRoute(CurrentCell, GoalCell, pGoalName, false) && g_Config.m_TcAiBotAllowFreeze)
+			BuildRoute(CurrentCell, GoalCell, pGoalName, true);
 	}
 	UpdateReward(CurrentCell, Tick);
 	MaybeSaveProgress(Tick);
