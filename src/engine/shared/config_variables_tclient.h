@@ -296,4 +296,6 @@ MACRO_CONFIG_INT(TcAiBotFreezePenalty, tc_aibot_freeze_penalty, 50, 1, 500, CFGF
 MACRO_CONFIG_INT(TcAiBotFailurePenalty, tc_aibot_failure_penalty, 20, 1, 200, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Extra A* route cost per learned dangerous trajectory point")
 MACRO_CONFIG_INT(TcAiBotSuccessBonus, tc_aibot_success_bonus, 3, 0, 20, CFGFLAG_CLIENT | CFGFLAG_SAVE, "A* route bonus per successfully traversed map cell")
 MACRO_CONFIG_INT(TcAiBotFailureTrail, tc_aibot_failure_trail, 8, 1, 32, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Unique recently travelled cells remembered when an AIBot attempt fails")
+MACRO_CONFIG_INT(TcAiBotInputExplorePercent, tc_aibot_input_explore_percent, 25, 0, 100, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Percent of known AIBot jump and hook states that try a less-tested input variant")
+MACRO_CONFIG_INT(TcAiBotInputTrialTicks, tc_aibot_input_trial_ticks, 50, 5, 250, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Ticks before a stalled AIBot jump or hook input variant is retried differently")
 MACRO_CONFIG_INT(TcAiBotMaxNodes, tc_aibot_max_nodes, 20000, 1000, 100000, CFGFLAG_CLIENT | CFGFLAG_SAVE, "Maximum nodes expanded by AIBot A* per route")
