@@ -65,6 +65,7 @@ private:
 	void ResetEpisode();
 	void UpdateReward(int CurrentCell, int Tick);
 	bool HandleFreeze(int CurrentCell, int Tick);
+	void FinishResetAtSpawn(int Tick);
 	std::array<float, 6> RewardFeatures(int Cell, int RouteIndex, bool OnRoute, bool Safe, bool Finished) const;
 	float PredictReward(const std::array<float, 6> &Features) const;
 	void TrainRewardNet(float TrainingReward, const std::array<float, 6> &Features);
@@ -90,6 +91,8 @@ private:
 	int m_LastRewardTick = -1000000;
 	int m_LastPersistenceTick = -1000000;
 	int m_UnsafeFreezeSinceTick = -1;
+	int m_ResetRequestedTick = -1000000;
+	int m_ResetRetries = 0;
 	int m_PostFinishTicks = 0;
 	int m_Episodes = 0;
 	int m_StartCount = 0;
@@ -109,6 +112,7 @@ private:
 	bool m_HadLocalCharacter = false;
 	bool m_EpisodeActive = false;
 	bool m_ResetRequested = false;
+	bool m_ResetSawNoCharacter = false;
 	bool m_RaceStarted = false;
 	bool m_FinishCrossed = false;
 	bool m_ForceReplan = true;
