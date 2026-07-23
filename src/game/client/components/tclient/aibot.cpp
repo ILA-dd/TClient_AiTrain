@@ -59,10 +59,22 @@ void CAIBot::OnReset()
 	m_FailureCost.clear();
 	m_MapWidth = 0;
 	m_MapHeight = 0;
+	m_GoalCell = -1;
 	m_RouteIndex = 0;
 	m_LastPlanTick = -1000000;
 	m_LastCell = -1;
 	m_LastProgressCell = -1;
+	m_Episodes = 0;
+	m_FinishCount = 0;
+	m_DeathCount = 0;
+	m_RewardedPathSteps = 0;
+	m_OffRouteSteps = 0;
+	m_SafeFreezeSteps = 0;
+	m_RewardNetUpdates = 0;
+	m_TotalTrainingReward = 0.0f;
+	m_RewardNetEstimate = 0.0f;
+	m_aRewardNetWeights.fill(0.0f);
+	ResetEpisode();
 	m_HadLocalCharacter = false;
 	m_ForceReplan = true;
 	m_aMapName[0] = '\0';
@@ -83,16 +95,30 @@ bool CAIBot::EnsureMap()
 	if(str_comp(m_aMapName, pMapName) == 0 && m_MapWidth == Collision()->GetWidth() && m_MapHeight == Collision()->GetHeight())
 		return true;
 
+	SaveStats();
 	str_copy(m_aMapName, pMapName, sizeof(m_aMapName));
 	m_MapWidth = Collision()->GetWidth();
 	m_MapHeight = Collision()->GetHeight();
 	m_vRoute.clear();
 	m_FailureCost.clear();
+	m_GoalCell = -1;
 	m_RouteIndex = 0;
 	m_LastCell = -1;
 	m_LastProgressCell = -1;
+	m_Episodes = 0;
+	m_FinishCount = 0;
+	m_DeathCount = 0;
+	m_RewardedPathSteps = 0;
+	m_OffRouteSteps = 0;
+	m_SafeFreezeSteps = 0;
+	m_RewardNetUpdates = 0;
+	m_TotalTrainingReward = 0.0f;
+	m_RewardNetEstimate = 0.0f;
+	m_aRewardNetWeights.fill(0.0f);
+	ResetEpisode();
 	m_ForceReplan = true;
 	LoadLearning();
+	LoadStats();
 	SetStatus("Map loaded, planning route");
 	return true;
 }
@@ -109,6 +135,13 @@ int CAIBot::CellFromPos(const vec2 &Pos) const
 vec2 CAIBot::CellCenter(int Cell) const
 {
 	return vec2((float)((Cell % m_MapWidth) * TILE_SIZE + TILE_SIZE / 2), (float)((Cell / m_MapWidth) * TILE_SIZE + TILE_SIZE / 2));
+}
+
+float CAIBot::RouteProgressPercent() const
+{
+	if(m_vRoute.size() < 2 || m_LastRewardRouteIndex < 0)
+		return 0.0f;
+	return 100.0f * std::clamp((float)m_LastRewardRouteIndex / (float)(m_vRoute.size() - 1), 0.0f, 1.0f);
 }
 
 int CAIBot::RawTile(int Cell) const
@@ -144,6 +177,11 @@ bool CAIBot::IsFreeze(int Cell) const
 bool CAIBot::IsDeepFreeze(int Cell) const
 {
 	return IsDeepFreezeTile(RawTile(Cell)) || IsDeepFreezeTile(FrontRawTile(Cell));
+}
+
+bool CAIBot::IsFinish(int Cell) const
+{
+	return RawTile(Cell) == TILE_FINISH || FrontRawTile(Cell) == TILE_FINISH;
 }
 
 bool CAIBot::CanSurviveFreeze(int Cell) const
@@ -183,9 +221,24 @@ int CAIBot::FindFinish() const
 	return -1;
 }
 
+int CAIBot::RouteIndexForCell(int Cell) const
+{
+	if(Cell < 0 || m_vRoute.empty())
+		return -1;
+
+	const int Start = std::max(0, m_LastRewardRouteIndex - 1);
+	for(int Index = Start; Index < (int)m_vRoute.size(); ++Index)
+	{
+		if(m_vRoute[Index] == Cell)
+			return Index;
+	}
+	return -1;
+}
+
 bool CAIBot::BuildRoute(int StartCell)
 {
 	const int GoalCell = FindFinish();
+	m_GoalCell = GoalCell;
 	if(GoalCell < 0)
 	{
 		m_vRoute.clear();
@@ -267,18 +320,154 @@ bool CAIBot::BuildRoute(int StartCell)
 		m_vRoute.push_back(Cell);
 	std::reverse(m_vRoute.begin(), m_vRoute.end());
 	m_RouteIndex = 0;
+	m_LastRewardRouteIndex = -1;
+	m_LastRewardCell = -1;
 	str_format(m_aStatus, sizeof(m_aStatus), "A* route: %d nodes, %d checked", (int)m_vRoute.size(), Expanded);
 	return true;
 }
 
+void CAIBot::ResetEpisode()
+{
+	m_LastRewardCell = -1;
+	m_LastRewardRouteIndex = -1;
+	m_LastRewardTick = -1000000;
+	m_PostFinishTicks = 0;
+	m_CurrentReward = -1.0f;
+	m_LastTrainingReward = 0.0f;
+	m_EpisodeActive = false;
+	m_FinishCrossed = false;
+}
+
+std::array<float, 6> CAIBot::RewardFeatures(int Cell, int RouteIndex, bool OnRoute, bool Safe, bool Finished) const
+{
+	float Progress = 0.0f;
+	if(RouteIndex >= 0 && m_vRoute.size() > 1)
+		Progress = std::clamp((float)RouteIndex / (float)(m_vRoute.size() - 1), 0.0f, 1.0f);
+
+	return {1.0f, Progress, OnRoute ? 1.0f : 0.0f, Safe ? 1.0f : 0.0f, Finished ? 1.0f : 0.0f, IsFreeze(Cell) ? 1.0f : 0.0f};
+}
+
+float CAIBot::PredictReward(const std::array<float, 6> &Features) const
+{
+	float Sum = 0.0f;
+	for(size_t Index = 0; Index < Features.size(); ++Index)
+		Sum += m_aRewardNetWeights[Index] * Features[Index];
+	return std::tanh(Sum);
+}
+
+void CAIBot::TrainRewardNet(float TrainingReward, const std::array<float, 6> &Features)
+{
+	const float Prediction = PredictReward(Features);
+	const float Target = std::clamp(TrainingReward / 5.0f, -1.0f, 1.0f);
+	const float Gradient = 0.03f * (Target - Prediction) * (1.0f - Prediction * Prediction);
+	for(size_t Index = 0; Index < Features.size(); ++Index)
+		m_aRewardNetWeights[Index] += Gradient * Features[Index];
+
+	m_RewardNetEstimate = PredictReward(Features);
+	++m_RewardNetUpdates;
+}
+
+void CAIBot::UpdateReward(int CurrentCell, int Tick)
+{
+	if(Tick == m_LastRewardTick || CurrentCell < 0)
+		return;
+	m_LastRewardTick = Tick;
+
+	if(!m_EpisodeActive)
+	{
+		m_EpisodeActive = true;
+		++m_Episodes;
+	}
+
+	const bool Safe = IsWalkable(CurrentCell);
+	const bool Finish = IsFinish(CurrentCell);
+	const int RouteIndex = RouteIndexForCell(CurrentCell);
+	const bool OnRoute = RouteIndex >= 0;
+
+	if(m_FinishCrossed)
+	{
+		++m_PostFinishTicks;
+		m_CurrentReward = 0.25f * (float)m_PostFinishTicks;
+		m_LastTrainingReward = 0.25f;
+		m_TotalTrainingReward += m_LastTrainingReward;
+		TrainRewardNet(m_LastTrainingReward, RewardFeatures(CurrentCell, RouteIndex, OnRoute, Safe, true));
+		return;
+	}
+
+	if(Finish)
+	{
+		m_FinishCrossed = true;
+		m_PostFinishTicks = 0;
+		m_CurrentReward = 0.0f;
+		m_LastTrainingReward = 0.0f;
+		++m_FinishCount;
+		TrainRewardNet(0.0f, RewardFeatures(CurrentCell, RouteIndex, OnRoute, Safe, true));
+		SaveStats();
+		SetStatus("Finish crossed: reward reset to zero");
+		return;
+	}
+
+	if(CurrentCell == m_LastRewardCell)
+		return;
+
+	if(OnRoute)
+	{
+		const int Remaining = (int)m_vRoute.size() - RouteIndex - 1;
+		m_CurrentReward = -(float)std::max(1, Remaining + 1);
+
+		if(m_LastRewardRouteIndex < 0)
+		{
+			m_LastTrainingReward = -1.0f;
+		}
+		else if(RouteIndex == m_LastRewardRouteIndex + 1 && Safe)
+		{
+			// Only the next A* node earns a positive training reward. A jump to a
+			// later node (for example by clipping through blocks) is penalized.
+			m_LastTrainingReward = 1.0f;
+			++m_RewardedPathSteps;
+			if(IsFreeze(CurrentCell))
+				++m_SafeFreezeSteps;
+		}
+		else if(RouteIndex > m_LastRewardRouteIndex + 1)
+		{
+			m_LastTrainingReward = -2.0f;
+			++m_OffRouteSteps;
+		}
+		else
+		{
+			m_LastTrainingReward = -0.25f;
+		}
+
+		m_LastRewardRouteIndex = RouteIndex;
+		m_RouteIndex = std::max(m_RouteIndex, RouteIndex);
+	}
+	else
+	{
+		m_CurrentReward = std::min(-1.0f, m_CurrentReward - 3.0f);
+		m_LastTrainingReward = -3.0f;
+		++m_OffRouteSteps;
+		m_LastRewardRouteIndex = -1;
+	}
+
+	m_LastRewardCell = CurrentCell;
+	m_TotalTrainingReward += m_LastTrainingReward;
+	TrainRewardNet(m_LastTrainingReward, RewardFeatures(CurrentCell, RouteIndex, OnRoute, Safe, false));
+}
+
 void CAIBot::RegisterFailure()
 {
-	if(m_LastProgressCell < 0)
-		return;
-	++m_FailureCost[m_LastProgressCell];
+	++m_DeathCount;
+	m_LastTrainingReward = -5.0f;
+	m_TotalTrainingReward += m_LastTrainingReward;
+	if(m_LastProgressCell >= 0)
+	{
+		++m_FailureCost[m_LastProgressCell];
+		TrainRewardNet(m_LastTrainingReward, RewardFeatures(m_LastProgressCell, RouteIndexForCell(m_LastProgressCell), false, false, false));
+	}
 	SaveLearning();
+	SaveStats();
 	m_ForceReplan = true;
-	str_format(m_aStatus, sizeof(m_aStatus), "Learned a failed state at tile %d", m_LastProgressCell);
+	str_format(m_aStatus, sizeof(m_aStatus), "Death learned at tile %d", m_LastProgressCell);
 }
 
 void CAIBot::LoadLearning()
@@ -325,6 +514,53 @@ void CAIBot::SaveLearning() const
 	io_close(File);
 }
 
+void CAIBot::LoadStats()
+{
+	if(!m_aMapName[0])
+		return;
+
+	char aFilename[IO_MAX_PATH_LENGTH];
+	str_format(aFilename, sizeof(aFilename), "aibot/%s.stats", m_aMapName);
+	CLineReader Reader;
+	if(!Reader.OpenFile(Storage()->OpenFile(aFilename, IOFLAG_READ, IStorage::TYPE_SAVE)))
+		return;
+
+	while(const char *pLine = Reader.Get())
+	{
+		int Version = 0;
+		if(std::sscanf(pLine, "v%d %d %d %d %d %d %d %d", &Version, &m_Episodes, &m_FinishCount, &m_DeathCount, &m_RewardedPathSteps, &m_OffRouteSteps, &m_SafeFreezeSteps, &m_RewardNetUpdates) == 8 && Version == 1)
+			continue;
+		if(std::sscanf(pLine, "reward %f", &m_TotalTrainingReward) == 1)
+			continue;
+		std::sscanf(pLine, "net %f %f %f %f %f %f", &m_aRewardNetWeights[0], &m_aRewardNetWeights[1], &m_aRewardNetWeights[2], &m_aRewardNetWeights[3], &m_aRewardNetWeights[4], &m_aRewardNetWeights[5]);
+	}
+}
+
+void CAIBot::SaveStats() const
+{
+	if(!m_aMapName[0])
+		return;
+
+	Storage()->CreateFolder("aibot", IStorage::TYPE_SAVE);
+	char aFilename[IO_MAX_PATH_LENGTH];
+	str_format(aFilename, sizeof(aFilename), "aibot/%s.stats", m_aMapName);
+	IOHANDLE File = Storage()->OpenFile(aFilename, IOFLAG_WRITE, IStorage::TYPE_SAVE);
+	if(!File)
+	{
+		log_error("aibot", "Failed to save stats to '%s'", aFilename);
+		return;
+	}
+
+	char aLine[256];
+	str_format(aLine, sizeof(aLine), "v1 %d %d %d %d %d %d %d\n", m_Episodes, m_FinishCount, m_DeathCount, m_RewardedPathSteps, m_OffRouteSteps, m_SafeFreezeSteps, m_RewardNetUpdates);
+	io_write(File, aLine, str_length(aLine));
+	str_format(aLine, sizeof(aLine), "reward %.6f\n", m_TotalTrainingReward);
+	io_write(File, aLine, str_length(aLine));
+	str_format(aLine, sizeof(aLine), "net %.8f %.8f %.8f %.8f %.8f %.8f\n", m_aRewardNetWeights[0], m_aRewardNetWeights[1], m_aRewardNetWeights[2], m_aRewardNetWeights[3], m_aRewardNetWeights[4], m_aRewardNetWeights[5]);
+	io_write(File, aLine, str_length(aLine));
+	io_close(File);
+}
+
 void CAIBot::OnRender()
 {
 	if(!EnsureMap())
@@ -334,7 +570,13 @@ void CAIBot::OnRender()
 	if(!pCharacter)
 	{
 		if(m_HadLocalCharacter)
-			RegisterFailure();
+		{
+			if(m_FinishCrossed)
+				SaveStats();
+			else
+				RegisterFailure();
+			ResetEpisode();
+		}
 		m_HadLocalCharacter = false;
 		return;
 	}
@@ -352,11 +594,14 @@ void CAIBot::OnRender()
 		m_ForceReplan = false;
 		BuildRoute(CurrentCell);
 	}
+	UpdateReward(CurrentCell, Tick);
 }
 
 bool CAIBot::ApplyInput(CNetObj_PlayerInput &Input)
 {
 	if(!g_Config.m_TcAiBot || !EnsureMap())
+		return false;
+	if(m_FinishCrossed)
 		return false;
 
 	const CNetObj_Character *pCharacter = GameClient()->m_Snap.m_pLocalCharacter;
@@ -397,7 +642,19 @@ void CAIBot::ForceReplan()
 void CAIBot::ClearLearning()
 {
 	m_FailureCost.clear();
+	m_Episodes = 0;
+	m_FinishCount = 0;
+	m_DeathCount = 0;
+	m_RewardedPathSteps = 0;
+	m_OffRouteSteps = 0;
+	m_SafeFreezeSteps = 0;
+	m_RewardNetUpdates = 0;
+	m_TotalTrainingReward = 0.0f;
+	m_RewardNetEstimate = 0.0f;
+	m_aRewardNetWeights.fill(0.0f);
+	ResetEpisode();
 	SaveLearning();
+	SaveStats();
 	ForceReplan();
-	SetStatus("Learning data cleared for this map");
+	SetStatus("Reward network and map learning cleared");
 }

@@ -389,14 +389,23 @@ void CMenus::RenderSettingsTClientAIBot(CUIRect MainView)
 
 	MainView.HSplitTop(Margin, nullptr, &MainView);
 	MainView.HSplitTop(HeadlineHeight, &Label, &MainView);
-	Ui()->DoLabel(&Label, "A* learns failed tiles per map and avoids them on the next route.", StandardFontSize, TEXTALIGN_ML);
+	Ui()->DoLabel(&Label, "Reward learner only rewards the next safe A* node: no reward for block shortcuts.", StandardFontSize, TEXTALIGN_ML);
 	MainView.HSplitTop(MarginSmall, nullptr, &MainView);
 
 	char aStatus[256];
 	str_format(aStatus, sizeof(aStatus), "Status: %s", GameClient()->m_AIBot.Status());
 	MainView.HSplitTop(LineSize, &Label, &MainView);
 	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
-	str_format(aStatus, sizeof(aStatus), "Route nodes: %d | learned failed tiles: %d", GameClient()->m_AIBot.PlannedNodes(), GameClient()->m_AIBot.LearnedFailures());
+	str_format(aStatus, sizeof(aStatus), "Route: %d/%d (%.1f%%) | learned failed tiles: %d", GameClient()->m_AIBot.RouteProgressNodes(), GameClient()->m_AIBot.PlannedNodes(), GameClient()->m_AIBot.RouteProgressPercent(), GameClient()->m_AIBot.LearnedFailures());
+	MainView.HSplitTop(LineSize, &Label, &MainView);
+	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
+	str_format(aStatus, sizeof(aStatus), "Current reward: %.2f | last training reward: %.2f | reward net: %.2f", GameClient()->m_AIBot.CurrentReward(), GameClient()->m_AIBot.LastTrainingReward(), GameClient()->m_AIBot.RewardNetEstimate());
+	MainView.HSplitTop(LineSize, &Label, &MainView);
+	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
+	str_format(aStatus, sizeof(aStatus), "Episodes: %d | finishes: %d | deaths: %d | net updates: %d", GameClient()->m_AIBot.Episodes(), GameClient()->m_AIBot.FinishCount(), GameClient()->m_AIBot.DeathCount(), GameClient()->m_AIBot.RewardNetUpdates());
+	MainView.HSplitTop(LineSize, &Label, &MainView);
+	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
+	str_format(aStatus, sizeof(aStatus), "Correct A* steps: %d | off-route steps: %d | total training reward: %.1f", GameClient()->m_AIBot.RewardedPathSteps(), GameClient()->m_AIBot.OffRouteSteps(), GameClient()->m_AIBot.TotalTrainingReward());
 	MainView.HSplitTop(LineSize, &Label, &MainView);
 	Ui()->DoLabel(&Label, aStatus, StandardFontSize, TEXTALIGN_ML);
 
