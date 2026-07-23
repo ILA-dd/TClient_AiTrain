@@ -65,6 +65,7 @@ void CAIBot::OnReset()
 	m_LastCell = -1;
 	m_LastProgressCell = -1;
 	m_Episodes = 0;
+	m_StartCount = 0;
 	m_FinishCount = 0;
 	m_DeathCount = 0;
 	m_RewardedPathSteps = 0;
@@ -106,6 +107,7 @@ bool CAIBot::EnsureMap()
 	m_LastCell = -1;
 	m_LastProgressCell = -1;
 	m_Episodes = 0;
+	m_StartCount = 0;
 	m_FinishCount = 0;
 	m_DeathCount = 0;
 	m_RewardedPathSteps = 0;
@@ -179,6 +181,11 @@ bool CAIBot::IsDeepFreeze(int Cell) const
 	return IsDeepFreezeTile(RawTile(Cell)) || IsDeepFreezeTile(FrontRawTile(Cell));
 }
 
+bool CAIBot::IsStart(int Cell) const
+{
+	return RawTile(Cell) == TILE_START || FrontRawTile(Cell) == TILE_START;
+}
+
 bool CAIBot::IsFinish(int Cell) const
 {
 	return RawTile(Cell) == TILE_FINISH || FrontRawTile(Cell) == TILE_FINISH;
@@ -210,12 +217,23 @@ bool CAIBot::IsWalkable(int Cell) const
 	return true;
 }
 
+int CAIBot::FindStart() const
+{
+	const int NumCells = m_MapWidth * m_MapHeight;
+	for(int Cell = 0; Cell < NumCells; ++Cell)
+	{
+		if(IsStart(Cell))
+			return Cell;
+	}
+	return -1;
+}
+
 int CAIBot::FindFinish() const
 {
 	const int NumCells = m_MapWidth * m_MapHeight;
 	for(int Cell = 0; Cell < NumCells; ++Cell)
 	{
-		if(RawTile(Cell) == TILE_FINISH || FrontRawTile(Cell) == TILE_FINISH)
+		if(IsFinish(Cell))
 			return Cell;
 	}
 	return -1;
@@ -235,14 +253,13 @@ int CAIBot::RouteIndexForCell(int Cell) const
 	return -1;
 }
 
-bool CAIBot::BuildRoute(int StartCell)
+bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName)
 {
-	const int GoalCell = FindFinish();
 	m_GoalCell = GoalCell;
 	if(GoalCell < 0)
 	{
 		m_vRoute.clear();
-		SetStatus("No finish tile on this map");
+		str_format(m_aStatus, sizeof(m_aStatus), "No %s tile on this map", pGoalName);
 		return false;
 	}
 	if(StartCell < 0 || !IsWalkable(StartCell))
@@ -317,12 +334,10 @@ bool CAIBot::BuildRoute(int StartCell)
 
 	m_vRoute.clear();
 	for(int Cell = GoalCell; Cell != -1; Cell = vPrevious[Cell])
-		m_vRoute.push_back(Cell);
+	m_vRoute.push_back(Cell);
 	std::reverse(m_vRoute.begin(), m_vRoute.end());
 	m_RouteIndex = 0;
-	m_LastRewardRouteIndex = -1;
-	m_LastRewardCell = -1;
-	str_format(m_aStatus, sizeof(m_aStatus), "A* route: %d nodes, %d checked", (int)m_vRoute.size(), Expanded);
+	str_format(m_aStatus, sizeof(m_aStatus), "A* to %s: %d nodes, %d checked", pGoalName, (int)m_vRoute.size(), Expanded);
 	return true;
 }
 
@@ -335,7 +350,17 @@ void CAIBot::ResetEpisode()
 	m_CurrentReward = -1.0f;
 	m_LastTrainingReward = 0.0f;
 	m_EpisodeActive = false;
+	m_RaceStarted = false;
 	m_FinishCrossed = false;
+}
+
+const char *CAIBot::PhaseName() const
+{
+	if(m_FinishCrossed)
+		return "finished";
+	if(m_RaceStarted)
+		return "racing";
+	return "to start";
 }
 
 std::array<float, 6> CAIBot::RewardFeatures(int Cell, int RouteIndex, bool OnRoute, bool Safe, bool Finished) const
@@ -380,30 +405,68 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 	}
 
 	const bool Safe = IsWalkable(CurrentCell);
+	const bool Start = IsStart(CurrentCell);
 	const bool Finish = IsFinish(CurrentCell);
 	const int RouteIndex = RouteIndexForCell(CurrentCell);
 	const bool OnRoute = RouteIndex >= 0;
 
 	if(m_FinishCrossed)
+		return;
+
+	// A race has two different objectives. Before START, the displayed reward
+	// remains negative and approaches zero only while the tee follows A* to the
+	// start tile. On START, it is reset to zero and the finish run begins.
+	if(!m_RaceStarted)
 	{
-		++m_PostFinishTicks;
-		m_CurrentReward = 0.25f * (float)m_PostFinishTicks;
-		m_LastTrainingReward = 0.25f;
+		if(Start)
+		{
+			m_RaceStarted = true;
+			m_CurrentReward = 0.0f;
+			m_LastTrainingReward = 0.0f;
+			m_LastRewardCell = -1;
+			m_LastRewardRouteIndex = -1;
+			++m_StartCount;
+			m_ForceReplan = true;
+			SaveStats();
+			SetStatus("Start crossed: reward reset to zero, planning finish");
+			return;
+		}
+
+		if(CurrentCell == m_LastRewardCell)
+			return;
+
+		if(OnRoute)
+		{
+			const int Remaining = (int)m_vRoute.size() - RouteIndex - 1;
+			m_CurrentReward = -(float)std::max(1, Remaining + 1);
+			m_LastTrainingReward = m_LastRewardRouteIndex >= 0 && RouteIndex > m_LastRewardRouteIndex ? 0.25f : -0.25f;
+			m_LastRewardRouteIndex = RouteIndex;
+			m_RouteIndex = std::max(m_RouteIndex, RouteIndex);
+		}
+		else
+		{
+			m_CurrentReward = std::min(-1.0f, m_CurrentReward - 2.0f);
+			m_LastTrainingReward = -2.0f;
+			++m_OffRouteSteps;
+			m_ForceReplan = true;
+		}
+
+		m_LastRewardCell = CurrentCell;
 		m_TotalTrainingReward += m_LastTrainingReward;
-		TrainRewardNet(m_LastTrainingReward, RewardFeatures(CurrentCell, RouteIndex, OnRoute, Safe, true));
+		TrainRewardNet(m_LastTrainingReward, RewardFeatures(CurrentCell, RouteIndex, OnRoute, Safe, false));
 		return;
 	}
 
 	if(Finish)
 	{
 		m_FinishCrossed = true;
-		m_PostFinishTicks = 0;
-		m_CurrentReward = 0.0f;
-		m_LastTrainingReward = 0.0f;
+		m_LastTrainingReward = 20.0f;
+		m_CurrentReward += 100.0f;
+		m_TotalTrainingReward += m_LastTrainingReward;
 		++m_FinishCount;
-		TrainRewardNet(0.0f, RewardFeatures(CurrentCell, RouteIndex, OnRoute, Safe, true));
+		TrainRewardNet(m_LastTrainingReward, RewardFeatures(CurrentCell, RouteIndex, OnRoute, Safe, true));
 		SaveStats();
-		SetStatus("Finish crossed: reward reset to zero");
+		SetStatus("Finish crossed: terminal reward +100");
 		return;
 	}
 
@@ -412,30 +475,31 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 
 	if(OnRoute)
 	{
-		const int Remaining = (int)m_vRoute.size() - RouteIndex - 1;
-		m_CurrentReward = -(float)std::max(1, Remaining + 1);
-
 		if(m_LastRewardRouteIndex < 0)
 		{
-			m_LastTrainingReward = -1.0f;
+			// A route rebuild establishes a baseline; it must not reward standing
+			// on the same tile or let the bot farm replans.
+			m_LastTrainingReward = 0.0f;
 		}
 		else if(RouteIndex == m_LastRewardRouteIndex + 1 && Safe)
 		{
-			// Only the next A* node earns a positive training reward. A jump to a
-			// later node (for example by clipping through blocks) is penalized.
-			m_LastTrainingReward = 1.0f;
+			const float Progress = m_vRoute.size() > 1 ? (float)RouteIndex / (float)(m_vRoute.size() - 1) : 1.0f;
+			m_LastTrainingReward = 1.0f + 8.0f * Progress;
+			m_CurrentReward += m_LastTrainingReward;
 			++m_RewardedPathSteps;
 			if(IsFreeze(CurrentCell))
 				++m_SafeFreezeSteps;
 		}
 		else if(RouteIndex > m_LastRewardRouteIndex + 1)
 		{
-			m_LastTrainingReward = -2.0f;
+			m_LastTrainingReward = -3.0f;
+			m_CurrentReward -= 3.0f;
 			++m_OffRouteSteps;
 		}
 		else
 		{
-			m_LastTrainingReward = -0.25f;
+			m_LastTrainingReward = -1.0f;
+			m_CurrentReward -= 1.0f;
 		}
 
 		m_LastRewardRouteIndex = RouteIndex;
@@ -443,10 +507,11 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 	}
 	else
 	{
-		m_CurrentReward = std::min(-1.0f, m_CurrentReward - 3.0f);
-		m_LastTrainingReward = -3.0f;
+		m_CurrentReward -= 4.0f;
+		m_LastTrainingReward = -4.0f;
 		++m_OffRouteSteps;
 		m_LastRewardRouteIndex = -1;
+		m_ForceReplan = true;
 	}
 
 	m_LastRewardCell = CurrentCell;
@@ -457,7 +522,8 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 void CAIBot::RegisterFailure()
 {
 	++m_DeathCount;
-	m_LastTrainingReward = -5.0f;
+	m_LastTrainingReward = m_RaceStarted ? -10.0f : -2.0f;
+	m_CurrentReward -= m_RaceStarted ? 10.0f : 2.0f;
 	m_TotalTrainingReward += m_LastTrainingReward;
 	if(m_LastProgressCell >= 0)
 	{
@@ -528,6 +594,8 @@ void CAIBot::LoadStats()
 	while(const char *pLine = Reader.Get())
 	{
 		int Version = 0;
+		if(std::sscanf(pLine, "v%d %d %d %d %d %d %d %d %d", &Version, &m_Episodes, &m_StartCount, &m_FinishCount, &m_DeathCount, &m_RewardedPathSteps, &m_OffRouteSteps, &m_SafeFreezeSteps, &m_RewardNetUpdates) == 9 && Version == 2)
+			continue;
 		if(std::sscanf(pLine, "v%d %d %d %d %d %d %d %d", &Version, &m_Episodes, &m_FinishCount, &m_DeathCount, &m_RewardedPathSteps, &m_OffRouteSteps, &m_SafeFreezeSteps, &m_RewardNetUpdates) == 8 && Version == 1)
 			continue;
 		if(std::sscanf(pLine, "reward %f", &m_TotalTrainingReward) == 1)
@@ -552,7 +620,7 @@ void CAIBot::SaveStats() const
 	}
 
 	char aLine[256];
-	str_format(aLine, sizeof(aLine), "v1 %d %d %d %d %d %d %d\n", m_Episodes, m_FinishCount, m_DeathCount, m_RewardedPathSteps, m_OffRouteSteps, m_SafeFreezeSteps, m_RewardNetUpdates);
+	str_format(aLine, sizeof(aLine), "v2 %d %d %d %d %d %d %d %d\n", m_Episodes, m_StartCount, m_FinishCount, m_DeathCount, m_RewardedPathSteps, m_OffRouteSteps, m_SafeFreezeSteps, m_RewardNetUpdates);
 	io_write(File, aLine, str_length(aLine));
 	str_format(aLine, sizeof(aLine), "reward %.6f\n", m_TotalTrainingReward);
 	io_write(File, aLine, str_length(aLine));
@@ -592,7 +660,19 @@ void CAIBot::OnRender()
 	{
 		m_LastPlanTick = Tick;
 		m_ForceReplan = false;
-		BuildRoute(CurrentCell);
+		int GoalCell = m_RaceStarted ? FindFinish() : FindStart();
+		const char *pGoalName = m_RaceStarted ? "finish" : "start";
+		if(GoalCell < 0 && !m_RaceStarted)
+		{
+			// Non-race maps do not contain START. They still get a usable route,
+			// but their reward begins from the current position.
+			m_RaceStarted = true;
+			m_CurrentReward = 0.0f;
+			GoalCell = FindFinish();
+			pGoalName = "finish";
+			SetStatus("No start tile: racing from current position");
+		}
+		BuildRoute(CurrentCell, GoalCell, pGoalName);
 	}
 	UpdateReward(CurrentCell, Tick);
 }
@@ -618,18 +698,46 @@ bool CAIBot::ApplyInput(CNetObj_PlayerInput &Input)
 	if(m_RouteIndex >= (int)m_vRoute.size())
 		return false;
 
-	const vec2 Target = CellCenter(m_vRoute[m_RouteIndex]);
+	// Aim ahead of the next A* node. A single vertical node has no horizontal
+	// intent by itself, which used to leave the tee standing under ledges.
+	int AimIndex = m_RouteIndex;
+	bool NeedJump = false;
+	for(int Index = m_RouteIndex; Index < (int)m_vRoute.size() && Index <= m_RouteIndex + 4; ++Index)
+	{
+		if(CellCenter(m_vRoute[Index]).y < Position.y - 8.0f)
+		{
+			NeedJump = true;
+			AimIndex = std::min(Index + 1, (int)m_vRoute.size() - 1);
+			break;
+		}
+		AimIndex = Index;
+	}
+
+	const vec2 Target = CellCenter(m_vRoute[AimIndex]);
 	const vec2 Delta = Target - Position;
 	Input.m_Direction = Delta.x > 6.0f ? 1 : Delta.x < -6.0f ? -1 : 0;
-	Input.m_Jump = Delta.y < -8.0f ? 1 : 0;
+	const int DirectionCell = CurrentCell + Input.m_Direction;
+	if(Input.m_Direction != 0 && IsSolid(DirectionCell))
+		NeedJump = true;
+
+	// A held jump fires only once. Alternating short press/release windows lets
+	// the tee jump again after landing and makes wall-jumps possible.
+	const int Tick = Client()->GameTick(g_Config.m_ClDummy);
+	Input.m_Jump = NeedJump && ((Tick / 3) % 2 == 0) ? 1 : 0;
 	Input.m_TargetX = (int)Delta.x;
 	Input.m_TargetY = (int)Delta.y;
 	if(!Input.m_TargetX && !Input.m_TargetY)
 		Input.m_TargetX = 1;
 
-	// A hook is only requested for an upward route segment. The physics core
-	// still decides whether it can connect, so an unhookable surface is safe.
-	Input.m_Hook = g_Config.m_TcAiBotUseHook && Delta.y < -48.0f ? 1 : 0;
+	// Hook only for a tall climb and pulse it as well, so an unsuccessful hook
+	// cannot remain latched forever. The long aim vector reaches hookable walls.
+	const bool NeedHook = g_Config.m_TcAiBotUseHook && NeedJump && Delta.y < -48.0f;
+	Input.m_Hook = NeedHook && Tick % 12 < 8 ? 1 : 0;
+	if(NeedHook)
+	{
+		Input.m_TargetX = Input.m_Direction != 0 ? Input.m_Direction * 160 : (Delta.x >= 0.0f ? 80 : -80);
+		Input.m_TargetY = -200;
+	}
 	return true;
 }
 
@@ -643,6 +751,7 @@ void CAIBot::ClearLearning()
 {
 	m_FailureCost.clear();
 	m_Episodes = 0;
+	m_StartCount = 0;
 	m_FinishCount = 0;
 	m_DeathCount = 0;
 	m_RewardedPathSteps = 0;
