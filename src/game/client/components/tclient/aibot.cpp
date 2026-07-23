@@ -373,6 +373,9 @@ void CAIBot::ResetEpisode()
 	m_FinishCrossed = false;
 	m_UnsafeFreezeSinceTick = -1;
 	m_ResetRequested = false;
+	m_ResetRequestedTick = -1000000;
+	m_ResetRetries = 0;
+	m_ResetSawNoCharacter = false;
 }
 
 bool CAIBot::HandleFreeze(int CurrentCell, int Tick)
@@ -380,34 +383,53 @@ bool CAIBot::HandleFreeze(int CurrentCell, int Tick)
 	if(!g_Config.m_TcAiBotResetUnsafeFreeze || m_ResetRequested)
 		return m_ResetRequested;
 
-	// Do not kill a tee that has entered a freeze strip with a reachable solid
-	// platform underneath. It can fall through, land safely and unfreeze there.
-	if(IsFreeze(CurrentCell))
+	const bool DeepFreeze = IsDeepFreeze(CurrentCell);
+	const bool InFreeze = IsFreeze(CurrentCell) || DeepFreeze;
+	if(!InFreeze)
 	{
-		if(CanSurviveFreeze(CurrentCell))
-		{
-			m_UnsafeFreezeSinceTick = -1;
-			return false;
-		}
-		if(m_UnsafeFreezeSinceTick < 0)
-		{
-			m_UnsafeFreezeSinceTick = Tick;
-			SetStatus("Unsafe freeze detected, preparing reset");
-		}
+		// A tee that actually made it through a freeze strip must never be
+		// punished later by an old timer from the strip it already escaped.
+		m_UnsafeFreezeSinceTick = -1;
+		return false;
 	}
 
-	// Do not rely on the optional extended freeze snapshot here. Some servers
-	// report it late, while the map tile already proves that this is unsafe.
-	if(m_UnsafeFreezeSinceTick < 0 || Tick - m_UnsafeFreezeSinceTick < g_Config.m_TcAiBotUnsafeFreezeDelay)
+	if(m_UnsafeFreezeSinceTick < 0)
+	{
+		m_UnsafeFreezeSinceTick = Tick;
+		SetStatus(DeepFreeze ? "Deep freeze detected, preparing reset" : "Freeze detected, checking escape route");
+	}
+
+	// A solid platform below a normal freeze is only a *possible* escape: the
+	// tee still has to fall through the strip. The previous code treated it as
+	// safe forever, so a tee stuck in that strip was never reset. Give it a
+	// short grace period; if it is still in freeze, restart it normally.
+	const bool HasSafeDrop = !DeepFreeze && CanSurviveFreeze(CurrentCell);
+	const int ResetDelay = HasSafeDrop ? g_Config.m_TcAiBotSafeFreezeEscapeDelay : g_Config.m_TcAiBotUnsafeFreezeDelay;
+	if(Tick - m_UnsafeFreezeSinceTick < ResetDelay)
 		return false;
 
 	// Record exactly one failure before asking the server for a normal kill.
 	// The no-character handler skips a duplicate penalty while this reset is in flight.
 	RegisterFailure();
 	m_ResetRequested = true;
+	m_ResetRequestedTick = Tick;
+	m_ResetRetries = 0;
+	m_ResetSawNoCharacter = false;
 	GameClient()->SendKill();
-	SetStatus("Unsafe freeze: reset requested and learned");
+	SetStatus(DeepFreeze ? "Deep freeze: reset requested and learned" : "Freeze escape failed: reset requested and learned");
 	return true;
+}
+
+void CAIBot::FinishResetAtSpawn(int Tick)
+{
+	ResetEpisode();
+	m_vRoute.clear();
+	m_RouteIndex = 0;
+	m_LastPlanTick = Tick - 10;
+	m_LastRewardCell = -1;
+	m_LastRewardRouteIndex = -1;
+	m_ForceReplan = true;
+	SetStatus("Respawn confirmed: rebuilding route");
 }
 
 const char *CAIBot::PhaseName() const
@@ -743,7 +765,10 @@ void CAIBot::RenderHud() const
 	RenderLine(aLine);
 	str_format(aLine, sizeof(aLine), "Memory: %d tiles  NN: %d", LearnedFailures(), RewardNetUpdates());
 	RenderLine(aLine);
-	str_format(aLine, sizeof(aLine), "A* safe: %d  off: %d", RewardedPathSteps(), OffRouteSteps());
+	if(m_ResetRequested)
+		str_format(aLine, sizeof(aLine), "Reset pending: retry %d", m_ResetRetries);
+	else
+		str_format(aLine, sizeof(aLine), "A* safe: %d  off: %d", RewardedPathSteps(), OffRouteSteps());
 	RenderLine(aLine);
 
 	TextRender()->TextColor(TextRender()->DefaultTextColor());
@@ -761,11 +786,19 @@ void CAIBot::OnRender()
 	{
 		if(m_HadLocalCharacter)
 		{
-			if(m_FinishCrossed)
+			if(m_ResetRequested)
+			{
+				// Keep the reset request alive until the fresh spawn is observed.
+				// Some servers respawn instantly and never expose this state, which
+				// is handled below as well.
+				m_ResetSawNoCharacter = true;
+			}
+			else if(m_FinishCrossed)
 				SaveStats();
-			else if(!m_ResetRequested)
+			else
 				RegisterFailure();
-			ResetEpisode();
+			if(!m_ResetRequested)
+				ResetEpisode();
 		}
 		m_HadLocalCharacter = false;
 		return;
@@ -778,6 +811,31 @@ void CAIBot::OnRender()
 		m_LastProgressCell = CurrentCell;
 
 	const int Tick = Client()->GameTick(g_Config.m_ClDummy);
+	if(m_ResetRequested)
+	{
+		const bool SpawnIsOutsideFreeze = !IsFreeze(CurrentCell) && !IsDeepFreeze(CurrentCell);
+		if(m_ResetSawNoCharacter || SpawnIsOutsideFreeze)
+		{
+			// DDNet servers can replace the character within one snapshot. Accept a
+			// fresh safe position as a respawn too, otherwise the old pending flag
+			// would permanently suppress ApplyInput after a successful kill.
+			FinishResetAtSpawn(Tick);
+		}
+		else if(Tick - m_ResetRequestedTick >= 25)
+		{
+			// Keep trying in case the server ignored one packet. Do not train a
+			// second failure for a single freeze incident.
+			GameClient()->SendKill();
+			m_ResetRequestedTick = Tick;
+			++m_ResetRetries;
+			str_format(m_aStatus, sizeof(m_aStatus), "Reset still pending, retry %d", m_ResetRetries);
+			return;
+		}
+		else
+		{
+			return;
+		}
+	}
 	if(HandleFreeze(CurrentCell, Tick))
 	{
 		MaybeSaveProgress(Tick, true);
