@@ -12,6 +12,7 @@ class CAIBot : public CComponent
 public:
 	int Sizeof() const override { return sizeof(*this); }
 	void OnReset() override;
+	void OnShutdown() override;
 	void OnRender() override;
 
 	// Called immediately before the client sends the local player's input.
@@ -29,6 +30,8 @@ public:
 	float LastTrainingReward() const { return m_LastTrainingReward; }
 	float TotalTrainingReward() const { return m_TotalTrainingReward; }
 	float RewardNetEstimate() const { return m_RewardNetEstimate; }
+	float BestRaceProgressPercent() const { return 100.0f * m_BestRaceProgress; }
+	float BestRaceReward() const { return m_BestRaceReward; }
 	int Episodes() const { return m_Episodes; }
 	int StartCount() const { return m_StartCount; }
 	int FinishCount() const { return m_FinishCount; }
@@ -48,6 +51,7 @@ private:
 	bool IsDeepFreeze(int Cell) const;
 	bool IsStart(int Cell) const;
 	bool IsFinish(int Cell) const;
+	bool IsLocalFrozen(int Tick) const;
 	bool CanSurviveFreeze(int Cell) const;
 	int FindStart() const;
 	int FindFinish() const;
@@ -58,6 +62,7 @@ private:
 	vec2 CellCenter(int Cell) const;
 	void ResetEpisode();
 	void UpdateReward(int CurrentCell, int Tick);
+	bool HandleFreeze(int CurrentCell, int Tick);
 	std::array<float, 6> RewardFeatures(int Cell, int RouteIndex, bool OnRoute, bool Safe, bool Finished) const;
 	float PredictReward(const std::array<float, 6> &Features) const;
 	void TrainRewardNet(float TrainingReward, const std::array<float, 6> &Features);
@@ -66,6 +71,7 @@ private:
 	void SaveLearning() const;
 	void LoadStats();
 	void SaveStats() const;
+	void MaybeSaveProgress(int Tick, bool Force = false);
 	void SetStatus(const char *pStatus);
 
 	std::vector<int> m_vRoute;
@@ -80,6 +86,8 @@ private:
 	int m_LastRewardCell = -1;
 	int m_LastRewardRouteIndex = -1;
 	int m_LastRewardTick = -1000000;
+	int m_LastPersistenceTick = -1000000;
+	int m_UnsafeFreezeSinceTick = -1;
 	int m_PostFinishTicks = 0;
 	int m_Episodes = 0;
 	int m_StartCount = 0;
@@ -93,9 +101,12 @@ private:
 	float m_LastTrainingReward = 0.0f;
 	float m_TotalTrainingReward = 0.0f;
 	float m_RewardNetEstimate = 0.0f;
+	float m_BestRaceProgress = 0.0f;
+	float m_BestRaceReward = 0.0f;
 	std::array<float, 6> m_aRewardNetWeights = {};
 	bool m_HadLocalCharacter = false;
 	bool m_EpisodeActive = false;
+	bool m_ResetRequested = false;
 	bool m_RaceStarted = false;
 	bool m_FinishCrossed = false;
 	bool m_ForceReplan = true;
