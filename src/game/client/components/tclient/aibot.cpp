@@ -729,14 +729,44 @@ bool CAIBot::ApplyInput(CNetObj_PlayerInput &Input)
 	if(!Input.m_TargetX && !Input.m_TargetY)
 		Input.m_TargetX = 1;
 
-	// Hook only for a tall climb and pulse it as well, so an unsuccessful hook
-	// cannot remain latched forever. The long aim vector reaches hookable walls.
-	const bool NeedHook = g_Config.m_TcAiBotUseHook && NeedJump && Delta.y < -48.0f;
-	Input.m_Hook = NeedHook && Tick % 12 < 8 ? 1 : 0;
+	// A straight-up A* segment needs a real wall target. The old fixed right-side
+	// aim made the tee fail every climb whose hookable wall was on the left. Ray
+	// cast a small upward fan and use the first actual collision as hook target.
+	vec2 HookAim(0.0f, 0.0f);
+	const bool NeedsTallClimb = g_Config.m_TcAiBotUseHook && NeedJump && Delta.y < -32.0f;
+	if(NeedsTallClimb)
+	{
+		const float PreferredSide = Input.m_Direction != 0 ? (float)Input.m_Direction : (Delta.x < 0.0f ? -1.0f : 1.0f);
+		const std::array<vec2, 8> aHookRays = {
+			vec2(PreferredSide * 220.0f, -260.0f),
+			vec2(PreferredSide * 140.0f, -330.0f),
+			vec2(PreferredSide * 70.0f, -370.0f),
+			vec2(-PreferredSide * 220.0f, -260.0f),
+			vec2(-PreferredSide * 140.0f, -330.0f),
+			vec2(-PreferredSide * 70.0f, -370.0f),
+			vec2(300.0f, -180.0f),
+			vec2(-300.0f, -180.0f),
+		};
+		for(const vec2 &Ray : aHookRays)
+		{
+			vec2 CollisionPos;
+			if(Collision()->IntersectLine(Position, Position + Ray, &CollisionPos, nullptr) && distance(Position, CollisionPos) > 24.0f)
+			{
+				HookAim = CollisionPos - Position;
+				break;
+			}
+		}
+	}
+
+	const bool NeedHook = HookAim.x != 0.0f || HookAim.y != 0.0f;
+	Input.m_Hook = NeedHook && Tick % 12 < 10 ? 1 : 0;
 	if(NeedHook)
 	{
-		Input.m_TargetX = Input.m_Direction != 0 ? Input.m_Direction * 160 : (Delta.x >= 0.0f ? 80 : -80);
-		Input.m_TargetY = -200;
+		// Moving toward the wall while hooking prevents a vertical climb from
+		// becoming an aim-only swing with no horizontal control.
+		Input.m_Direction = HookAim.x > 8.0f ? 1 : HookAim.x < -8.0f ? -1 : Input.m_Direction;
+		Input.m_TargetX = (int)HookAim.x;
+		Input.m_TargetY = (int)HookAim.y;
 	}
 	return true;
 }
