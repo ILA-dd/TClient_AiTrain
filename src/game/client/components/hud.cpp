@@ -2046,6 +2046,7 @@ void CHud::OnRender()
 		if(g_Config.m_ClShowRecord)
 			RenderRecord();
 	}
+	GameClient()->m_AIBot.RenderHud();
 	RenderCursor();
 }
 
