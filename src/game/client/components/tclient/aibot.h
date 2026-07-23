@@ -30,22 +30,26 @@ public:
 	float TotalTrainingReward() const { return m_TotalTrainingReward; }
 	float RewardNetEstimate() const { return m_RewardNetEstimate; }
 	int Episodes() const { return m_Episodes; }
+	int StartCount() const { return m_StartCount; }
 	int FinishCount() const { return m_FinishCount; }
 	int DeathCount() const { return m_DeathCount; }
 	int RewardedPathSteps() const { return m_RewardedPathSteps; }
 	int OffRouteSteps() const { return m_OffRouteSteps; }
 	int RewardNetUpdates() const { return m_RewardNetUpdates; }
+	const char *PhaseName() const;
 
 private:
 	bool EnsureMap();
-	bool BuildRoute(int StartCell);
+	bool BuildRoute(int StartCell, int GoalCell, const char *pGoalName);
 	bool IsWalkable(int Cell) const;
 	bool IsSolid(int Cell) const;
 	bool IsDeath(int Cell) const;
 	bool IsFreeze(int Cell) const;
 	bool IsDeepFreeze(int Cell) const;
+	bool IsStart(int Cell) const;
 	bool IsFinish(int Cell) const;
 	bool CanSurviveFreeze(int Cell) const;
+	int FindStart() const;
 	int FindFinish() const;
 	int RouteIndexForCell(int Cell) const;
 	int RawTile(int Cell) const;
@@ -78,6 +82,7 @@ private:
 	int m_LastRewardTick = -1000000;
 	int m_PostFinishTicks = 0;
 	int m_Episodes = 0;
+	int m_StartCount = 0;
 	int m_FinishCount = 0;
 	int m_DeathCount = 0;
 	int m_RewardedPathSteps = 0;
@@ -91,6 +96,7 @@ private:
 	std::array<float, 6> m_aRewardNetWeights = {};
 	bool m_HadLocalCharacter = false;
 	bool m_EpisodeActive = false;
+	bool m_RaceStarted = false;
 	bool m_FinishCrossed = false;
 	bool m_ForceReplan = true;
 	char m_aMapName[128] = {};
