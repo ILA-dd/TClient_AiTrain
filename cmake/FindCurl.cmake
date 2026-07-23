@@ -24,7 +24,10 @@ mark_as_advanced(CURL_LIBRARY CURL_INCLUDEDIR)
 
 if(CURL_FOUND)
   is_bundled(CURL_BUNDLED "${CURL_LIBRARY}")
-  set(CURL_LIBRARIES ${CURL_LIBRARY})
+  # Some portable Windows builds use a static libcurl. Allow its transitive
+  # dependencies (for example OpenSSL) to be supplied explicitly while keeping
+  # the bundled dynamic curl as the default.
+  set(CURL_LIBRARIES ${CURL_LIBRARY} ${CURL_EXTRA_LIBRARIES})
   set(CURL_INCLUDE_DIRS ${CURL_INCLUDEDIR})
   if (CURL_BUNDLED AND TARGET_OS STREQUAL "windows" AND TARGET_CPU_ARCHITECTURE STREQUAL "arm64")
     set(CURL_COPY_FILES
