@@ -14,6 +14,9 @@ public:
 	void OnReset() override;
 	void OnShutdown() override;
 	void OnRender() override;
+	// Drawn by the normal HUD after the world, so training data stays readable
+	// instead of being covered by map layers or player renders.
+	void RenderHud() const;
 
 	// Called immediately before the client sends the local player's input.
 	// Returns true only when the bot replaced the movement input.
@@ -51,7 +54,6 @@ private:
 	bool IsDeepFreeze(int Cell) const;
 	bool IsStart(int Cell) const;
 	bool IsFinish(int Cell) const;
-	bool IsLocalFrozen(int Tick) const;
 	bool CanSurviveFreeze(int Cell) const;
 	int FindStart() const;
 	int FindFinish() const;
