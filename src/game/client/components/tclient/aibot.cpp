@@ -60,6 +60,8 @@ void CAIBot::OnReset()
 	m_vRoute.clear();
 	m_RouteUsesFreeze = false;
 	m_FailureCost.clear();
+	m_SuccessCount.clear();
+	m_vRecentCells.clear();
 	m_MapWidth = 0;
 	m_MapHeight = 0;
 	m_GoalCell = -1;
@@ -77,6 +79,8 @@ void CAIBot::OnReset()
 	m_OffRouteSteps = 0;
 	m_SafeFreezeSteps = 0;
 	m_RewardNetUpdates = 0;
+	m_LastFailureTrail = 0;
+	m_RouteRiskTiles = 0;
 	m_TotalTrainingReward = 0.0f;
 	m_RewardNetEstimate = 0.0f;
 	m_BestRaceProgress = 0.0f;
@@ -120,6 +124,8 @@ bool CAIBot::EnsureMap()
 	m_vRoute.clear();
 	m_RouteUsesFreeze = false;
 	m_FailureCost.clear();
+	m_SuccessCount.clear();
+	m_vRecentCells.clear();
 	m_GoalCell = -1;
 	m_RouteIndex = 0;
 	m_LastPersistenceTick = -1000000;
@@ -133,6 +139,8 @@ bool CAIBot::EnsureMap()
 	m_OffRouteSteps = 0;
 	m_SafeFreezeSteps = 0;
 	m_RewardNetUpdates = 0;
+	m_LastFailureTrail = 0;
+	m_RouteRiskTiles = 0;
 	m_TotalTrainingReward = 0.0f;
 	m_RewardNetEstimate = 0.0f;
 	m_BestRaceProgress = 0.0f;
@@ -225,7 +233,12 @@ bool CAIBot::CanSurviveFreeze(int Cell) const
 		if(IsDeath(Below) || IsDeepFreeze(Below))
 			return false;
 		if(IsSolid(Below))
-			return true;
+		{
+			// The solid tile is the floor, not a safe landing by itself. The
+			// tee must have a normal, non-freeze cell directly above it.
+			const int Landing = Below - m_MapWidth;
+			return Landing >= 0 && !IsSolid(Landing) && !IsDeath(Landing) && !IsDeepFreeze(Landing) && !IsFreeze(Landing);
+		}
 	}
 	return false;
 }
@@ -305,6 +318,79 @@ int CAIBot::RewardRouteIndexForCell(int Cell) const
 	return BestIndex;
 }
 
+int CAIBot::LearnedRisk(int Cell) const
+{
+	if(Cell < 0)
+		return 0;
+
+	// A failed approach is wider than one collision tile. Include a small
+	// cardinal neighbourhood so A* does not merely move one tile sideways and
+	// repeat the exact same fall on the next attempt.
+	int Risk = 0;
+	const int X = Cell % m_MapWidth;
+	const int Y = Cell / m_MapWidth;
+	const int aDx[] = {0, -1, 1, 0, 0};
+	const int aDy[] = {0, 0, 0, -1, 1};
+	for(int Index = 0; Index < 5; ++Index)
+	{
+		const int NextX = X + aDx[Index];
+		const int NextY = Y + aDy[Index];
+		if(NextX < 0 || NextX >= m_MapWidth || NextY < 0 || NextY >= m_MapHeight)
+			continue;
+		const int Next = NextY * m_MapWidth + NextX;
+		if(const auto It = m_FailureCost.find(Next); It != m_FailureCost.end())
+			Risk += Index == 0 ? It->second : (It->second + 1) / 2;
+	}
+	return std::min(Risk, 100);
+}
+
+int CAIBot::LearnedSuccessBonus(int Cell) const
+{
+	if(const auto It = m_SuccessCount.find(Cell); It != m_SuccessCount.end())
+		return std::min(It->second, 6) * g_Config.m_TcAiBotSuccessBonus;
+	return 0;
+}
+
+void CAIBot::RememberVisitedCell(int Cell)
+{
+	if(Cell < 0)
+		return;
+	if(!m_vRecentCells.empty() && m_vRecentCells.back() == Cell)
+		return;
+
+	m_vRecentCells.push_back(Cell);
+	const int Limit = std::max(1, g_Config.m_TcAiBotFailureTrail);
+	if((int)m_vRecentCells.size() > Limit)
+		m_vRecentCells.erase(m_vRecentCells.begin(), m_vRecentCells.begin() + ((int)m_vRecentCells.size() - Limit));
+}
+
+void CAIBot::ReinforceSuccess(int Cell)
+{
+	if(Cell < 0)
+		return;
+	int &Count = m_SuccessCount[Cell];
+	Count = std::min(Count + 1, 12);
+}
+
+void CAIBot::PenalizeRecentTrajectory()
+{
+	m_LastFailureTrail = 0;
+	if(m_vRecentCells.empty() && m_LastProgressCell >= 0)
+		m_vRecentCells.push_back(m_LastProgressCell);
+
+	const int Size = (int)m_vRecentCells.size();
+	for(int Index = 0; Index < Size; ++Index)
+	{
+		const int Cell = m_vRecentCells[Index];
+		// The newest cells are closest to the actual failure and get the
+		// strongest penalty. Older approach cells still receive a small one.
+		const int Weight = 1 + (Index * 4) / std::max(1, Size);
+		int &Cost = m_FailureCost[Cell];
+		Cost = std::min(Cost + Weight, 100);
+		++m_LastFailureTrail;
+	}
+}
+
 bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName, bool AllowFreeze)
 {
 	m_GoalCell = GoalCell;
@@ -312,6 +398,7 @@ bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName, bool
 	{
 		m_vRoute.clear();
 		m_RouteUsesFreeze = false;
+		m_RouteRiskTiles = 0;
 		str_format(m_aStatus, sizeof(m_aStatus), "No %s tile on this map", pGoalName);
 		return false;
 	}
@@ -319,6 +406,7 @@ bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName, bool
 	{
 		m_vRoute.clear();
 		m_RouteUsesFreeze = false;
+		m_RouteRiskTiles = 0;
 		SetStatus("Current position is not pathable");
 		return false;
 	}
@@ -366,8 +454,14 @@ bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName, bool
 			int StepCost = 10;
 			if(IsFreeze(Next))
 				StepCost += g_Config.m_TcAiBotFreezePenalty;
-			if(const auto It = m_FailureCost.find(Next); It != m_FailureCost.end())
-				StepCost += It->second * 25;
+			// This is the actual learning signal used by the pathfinder. Failed
+			// trajectories become expensive, while cells repeatedly traversed
+			// while earning progress receive a small preference. Risk always wins
+			// over the success bonus, so an old successful route cannot make the
+			// bot keep entering a newly discovered death trap.
+			StepCost += LearnedRisk(Next) * g_Config.m_TcAiBotFailurePenalty;
+			StepCost -= LearnedSuccessBonus(Next);
+			StepCost = std::max(2, StepCost);
 
 			const int NextCost = Current.m_GScore + StepCost;
 			if(NextCost >= vCost[Next])
@@ -383,6 +477,7 @@ bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName, bool
 	{
 		m_vRoute.clear();
 		m_RouteUsesFreeze = false;
+		m_RouteRiskTiles = 0;
 		str_format(m_aStatus, sizeof(m_aStatus), "A* stopped after %d nodes", Expanded);
 		return false;
 	}
@@ -392,6 +487,7 @@ bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName, bool
 	m_vRoute.push_back(Cell);
 	std::reverse(m_vRoute.begin(), m_vRoute.end());
 	m_RouteUsesFreeze = std::any_of(m_vRoute.begin(), m_vRoute.end(), [this](int Cell) { return IsFreeze(Cell); });
+	m_RouteRiskTiles = (int)std::count_if(m_vRoute.begin(), m_vRoute.end(), [this](int Cell) { return LearnedRisk(Cell) > 0; });
 	if(m_RaceStarted && m_vRewardRoute.empty())
 		m_vRewardRoute = m_vRoute;
 	m_RouteIndex = 0;
@@ -402,6 +498,7 @@ bool CAIBot::BuildRoute(int StartCell, int GoalCell, const char *pGoalName, bool
 void CAIBot::ResetEpisode()
 {
 	m_vRewardRoute.clear();
+	m_vRecentCells.clear();
 	m_RouteUsesFreeze = false;
 	m_LastRewardCell = -1;
 	m_LastRewardRouteIndex = -1;
@@ -465,6 +562,7 @@ void CAIBot::FinishResetAtSpawn(int Tick)
 {
 	ResetEpisode();
 	m_vRoute.clear();
+	m_RouteRiskTiles = 0;
 	m_RouteIndex = 0;
 	m_LastPlanTick = Tick - 10;
 	m_LastRewardCell = -1;
@@ -564,6 +662,8 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 			const float Delta = NewReward - m_CurrentReward;
 			m_CurrentReward = NewReward;
 			m_LastTrainingReward = Delta > 0.0f ? Delta : Delta < 0.0f ? -1.0f : 0.0f;
+			if(Delta > 0.0f)
+				ReinforceSuccess(CurrentCell);
 			m_LastRewardRouteIndex = RouteIndex;
 			m_RouteIndex = std::max(m_RouteIndex, RouteIndex);
 		}
@@ -609,6 +709,7 @@ void CAIBot::UpdateReward(int CurrentCell, int Tick)
 		if(Gain > 0.0f)
 		{
 			++m_RewardedPathSteps;
+			ReinforceSuccess(CurrentCell);
 			if(IsFreeze(CurrentCell))
 				++m_SafeFreezeSteps;
 		}
@@ -644,14 +745,14 @@ void CAIBot::RegisterFailure()
 	m_TotalTrainingReward += m_LastTrainingReward;
 	if(m_LastProgressCell >= 0)
 	{
-		++m_FailureCost[m_LastProgressCell];
+		PenalizeRecentTrajectory();
 		const int RouteIndex = m_RaceStarted ? RewardRouteIndexForCell(m_LastProgressCell) : RouteIndexForCell(m_LastProgressCell);
 		TrainRewardNet(m_LastTrainingReward, RewardFeatures(m_LastProgressCell, RouteIndex, false, false, false));
 	}
 	SaveLearning();
 	SaveStats();
 	m_ForceReplan = true;
-	str_format(m_aStatus, sizeof(m_aStatus), "Death learned at tile %d", m_LastProgressCell);
+	str_format(m_aStatus, sizeof(m_aStatus), "Failure learned: %d-cell approach, replanning", m_LastFailureTrail);
 }
 
 void CAIBot::LoadLearning()
@@ -669,6 +770,19 @@ void CAIBot::LoadLearning()
 	{
 		int Cell = -1;
 		int Cost = 0;
+		// v2 files distinguish danger memory from confirmed successful cells.
+		// The old two-number format remains valid and is interpreted as danger
+		// memory so existing users do not lose what the bot already learned.
+		if(std::sscanf(pLine, "D %d %d", &Cell, &Cost) == 2 && Cell >= 0 && Cell < m_MapWidth * m_MapHeight && Cost > 0)
+		{
+			m_FailureCost[Cell] = std::min(Cost, 100);
+			continue;
+		}
+		if(std::sscanf(pLine, "S %d %d", &Cell, &Cost) == 2 && Cell >= 0 && Cell < m_MapWidth * m_MapHeight && Cost > 0)
+		{
+			m_SuccessCount[Cell] = std::min(Cost, 12);
+			continue;
+		}
 		if(std::sscanf(pLine, "%d %d", &Cell, &Cost) == 2 && Cell >= 0 && Cell < m_MapWidth * m_MapHeight && Cost > 0)
 			m_FailureCost[Cell] = Cost;
 	}
@@ -689,10 +803,17 @@ void CAIBot::SaveLearning() const
 		return;
 	}
 
+	char aLine[64];
+	str_format(aLine, sizeof(aLine), "v2 %d %d\n", m_MapWidth, m_MapHeight);
+	io_write(File, aLine, str_length(aLine));
 	for(const auto &[Cell, Cost] : m_FailureCost)
 	{
-		char aLine[64];
-		str_format(aLine, sizeof(aLine), "%d %d\n", Cell, Cost);
+		str_format(aLine, sizeof(aLine), "D %d %d\n", Cell, Cost);
+		io_write(File, aLine, str_length(aLine));
+	}
+	for(const auto &[Cell, Count] : m_SuccessCount)
+	{
+		str_format(aLine, sizeof(aLine), "S %d %d\n", Cell, Count);
 		io_write(File, aLine, str_length(aLine));
 	}
 	io_close(File);
@@ -802,7 +923,7 @@ void CAIBot::RenderHud() const
 	RenderLine(aLine);
 	str_format(aLine, sizeof(aLine), "Attempts: %d  deaths: %d", Episodes(), DeathCount());
 	RenderLine(aLine);
-	str_format(aLine, sizeof(aLine), "Memory: %d tiles  NN: %d", LearnedFailures(), RewardNetUpdates());
+	str_format(aLine, sizeof(aLine), "Memory: danger %d  safe %d  risk %d", LearnedFailures(), LearnedSuccesses(), RouteRiskTiles());
 	RenderLine(aLine);
 	if(m_ResetRequested)
 		str_format(aLine, sizeof(aLine), "Reset pending: retry %d", m_ResetRetries);
@@ -847,7 +968,10 @@ void CAIBot::OnRender()
 	const int CurrentCell = CellFromPos(vec2((float)pCharacter->m_X, (float)pCharacter->m_Y));
 	m_LastCell = CurrentCell;
 	if(CurrentCell >= 0)
+	{
 		m_LastProgressCell = CurrentCell;
+		RememberVisitedCell(CurrentCell);
+	}
 
 	const int Tick = Client()->GameTick(g_Config.m_ClDummy);
 	if(m_ResetRequested)
@@ -1009,6 +1133,10 @@ void CAIBot::ForceReplan()
 void CAIBot::ClearLearning()
 {
 	m_FailureCost.clear();
+	m_SuccessCount.clear();
+	m_vRecentCells.clear();
+	m_LastFailureTrail = 0;
+	m_RouteRiskTiles = 0;
 	m_Episodes = 0;
 	m_StartCount = 0;
 	m_FinishCount = 0;
